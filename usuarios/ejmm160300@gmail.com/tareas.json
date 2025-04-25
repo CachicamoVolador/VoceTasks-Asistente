@@ -1,0 +1,20 @@
+{
+    "tareas": [
+        {
+            "descripcion": "tarea",
+            "fecha_creacion": "2025-04-25 15:13:32",
+            "fecha_limite": null,
+            "completada": true,
+            "categoria": "general",
+            "sincronizado_calendario": false
+        },
+        {
+            "descripcion": "ENTREGAS PROYECTO",
+            "fecha_creacion": "2025-04-25 15:14:54",
+            "fecha_limite": null,
+            "completada": false,
+            "categoria": "general",
+            "sincronizado_calendario": false
+        }
+    ]
+}

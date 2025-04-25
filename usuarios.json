@@ -1,0 +1,14 @@
+{
+    "usuarios": [
+        {
+            "email": "ejmm160300@gmail.com",
+            "name": "Enmanuel ",
+            "password": "32f9d124a64ec2def45f5efea8e33e960d14369dc537d47b79242835bfbd674c",
+            "created_at": "2025-04-25 15:12:29",
+            "config": {
+                "recordatorios_activos": true,
+                "modo_silencioso": false
+            }
+        }
+    ]
+}
