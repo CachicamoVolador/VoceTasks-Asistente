@@ -9,8 +9,9 @@ def crear_archivo_tareas_si_no_existe(ruta_archivo):
         with open(ruta_archivo, "w") as file:
             json.dump({"tareas": []}, file, indent=4)
 
-def agregar_tarea(tarea, email):
-    """Agrega una nueva tarea a la lista"""
+# Modificar la función agregar_tarea para aceptar categoria y fecha_limite
+def agregar_tarea(tarea, categoria, fecha_limite, email):
+    """Agrega una nueva tarea a la lista con categoría y fecha límite"""
     ruta_archivo = f"usuarios/{email}/tareas.json"
     crear_archivo_tareas_si_no_existe(ruta_archivo)
     try:
@@ -21,14 +22,24 @@ def agregar_tarea(tarea, email):
             if tarea.lower() in tareas_desc: # Comparar la nueva tarea en minúsculas
                 return f"La tarea '{tarea}' ya existe en tu lista"
 
+            # Validar formato de fecha límite si se proporciona
+            fecha_limite_str = None
+            if fecha_limite:
+                try:
+                    # Intentar parsear la fecha para asegurarse de que sea válida
+                    datetime.strptime(fecha_limite, "%Y-%m-%d %H:%M:%S")
+                    fecha_limite_str = fecha_limite
+                except ValueError:
+                    return f"Formato de fecha y hora inválido para la fecha límite. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
+
+
             # Agregar la tarea con información adicional
             nueva_tarea = {
                 "descripcion": tarea,
                 "fecha_creacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "fecha_limite": None,
+                "fecha_limite": fecha_limite_str, # Usar la fecha límite validada o None
                 "completada": False,
-                "categoria": "general",
-                # "sincronizado_calendario": False # Eliminado: ya no sincronizamos con Google Calendar
+                "categoria": categoria if categoria else "general", # Usar la categoría proporcionada o "general" por defecto
             }
 
             data["tareas"].append(nueva_tarea)
@@ -193,7 +204,7 @@ def agregar_recordatorio(tarea, fecha_limite, email):
 
                     return f"Fecha límite agregada para: '{tarea_encontrada['descripcion']}' - Fecha: {fecha_limite}"
                 except ValueError:
-                    return f"Formato de fecha y hora inválido. Usa YYYY-MM-DD HH:MM:SS (Ej: 2023-10-27 10:30:00)."
+                    return f"Formato de fecha y hora inválido. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
 
             else:
                 # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
@@ -215,12 +226,13 @@ def agregar_recordatorio(tarea, fecha_limite, email):
                          file.truncate()
                          return f"Fecha límite agregada para: '{tarea_encontrada['descripcion']}' - Fecha: {fecha_limite}"
                       except ValueError:
-                         return f"Formato de fecha y hora inválido. Usa YYYY-MM-DD HH:MM:SS (Ej: 2023-10-27 10:30:00)."
+                         return f"Formato de fecha y hora inválido. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
                  else:
-                    return "Tarea no encontrada para agregar recordatorio."
+                     return "Tarea no encontrada para agregar recordatorio."
     except Exception as e:
         print(f"Error al agregar recordatorio: {e}")
         return "No se pudo agregar el recordatorio"
+
 
 def cambiar_categoria(tarea, categoria, email):
     """Cambia la categoría de una tarea"""
@@ -394,9 +406,17 @@ def generar_reporte_mensual(email, año, mes):
                 fecha_str = tarea.get("fecha_limite") or tarea.get("fecha_creacion")
                 if fecha_str:
                     try:
-                        fecha_dt = datetime.strptime(fecha_str.split(" ")[0], "%Y-%m-%d")
-                        if fecha_dt.year == año and fecha_dt.month == mes:
-                            tareas_del_mes.append(tarea)
+                        # Asegurarse de que la cadena tenga el formato esperado antes de dividir
+                        if " " in fecha_str and len(fecha_str.split(" ")[0]) == 10:
+                            fecha_dt = datetime.strptime(fecha_str.split(" ")[0], "%Y-%m-%d")
+                            if fecha_dt.year == año and fecha_dt.month == mes:
+                                tareas_del_mes.append(tarea)
+                        # Manejar casos donde solo hay fecha (sin hora) si es necesario
+                        elif len(fecha_str) == 10: # %Y-%m-%d
+                             fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d")
+                             if fecha_dt.year == año and fecha_dt.month == mes:
+                                tareas_del_mes.append(tarea)
+
                     except ValueError:
                         # Ignorar tareas con formatos de fecha inválidos
                         pass
@@ -436,4 +456,3 @@ def generar_reporte_mensual(email, año, mes):
     except Exception as e:
         print(f"Error al generar reporte mensual: {e}")
         return f"Hubo un error al generar el reporte: {e}"
-
