@@ -1,11 +1,12 @@
-# commands.py (Completo y Actualizado con reporte mejorado)
+# commands.py (Modificado para reportes diarios/semanales/mensuales)
 
 import json
 import os
-from datetime import datetime, timedelta # Importar timedelta
-import html # Importar para escapar caracteres HTML
+from datetime import datetime, timedelta # Asegurarse de que timedelta esté importado
+import html
 
-# --- Funciones de Manejo de Archivos y Tareas ---
+# --- Funciones de Manejo de Archivos y Tareas (sin cambios) ---
+# ... (mantener las funciones existentes: crear_archivo_tareas_si_no_existe, agregar_tarea, etc.)
 
 def crear_archivo_tareas_si_no_existe(ruta_archivo):
     """Crea el archivo de tareas si no existe, incluyendo el directorio del usuario."""
@@ -263,52 +264,79 @@ def marcar_como_completada(tarea_a_completar, email):
         print(f"Error inesperado al marcar como completada: {e}")
         return False, "Error interno inesperado al marcar la tarea como completada."
 
-
-# --- Función de Reporte Mejorada ---
-def generar_reporte_mensual(mes, anho, email):
-    """Genera un reporte HTML mejorado de tareas para un mes y año dados."""
+# --- Nueva Función de Reporte Genérica ---
+def generar_reporte(periodo_tipo, fecha_inicio, fecha_fin, email):
+    """
+    Genera un reporte HTML de tareas para un período específico.
+    Args:
+        periodo_tipo (str): 'diario', 'semanal', o 'mensual'.
+        fecha_inicio (datetime.date): Fecha de inicio del período.
+        fecha_fin (datetime.date): Fecha de fin del período (inclusive).
+        email (str): Email del usuario.
+    Returns:
+        str: Contenido HTML del reporte o mensaje de error.
+    """
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    meses_nombres = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    mes_nombre = meses_nombres[mes] if 1 <= mes <= 12 else f"Mes {mes}"
+
+    # Determinar el título del reporte basado en el tipo y fechas
+    titulo_periodo = ""
+    if periodo_tipo == 'diario':
+        titulo_periodo = fecha_inicio.strftime('%d de %B de %Y')
+    elif periodo_tipo == 'semanal':
+        titulo_periodo = f"Semana del {fecha_inicio.strftime('%d/%m/%Y')} al {fecha_fin.strftime('%d/%m/%Y')}"
+    elif periodo_tipo == 'mensual':
+        titulo_periodo = fecha_inicio.strftime('%B de %Y')
+    else:
+        titulo_periodo = f"Período del {fecha_inicio.strftime('%d/%m/%Y')} al {fecha_fin.strftime('%d/%m/%Y')}"
 
     try:
         # Leer datos de tareas
         tareas_data = mostrar_tareas(email) # Reutilizar función de carga segura
         tareas = tareas_data.get("tareas", [])
 
-        tareas_del_mes = []
+        tareas_del_periodo = []
+        # Convertir fechas de inicio/fin a datetime para comparación completa (incluyendo hora 00:00 y 23:59:59)
+        inicio_dt = datetime.combine(fecha_inicio, datetime.min.time())
+        fin_dt = datetime.combine(fecha_fin, datetime.max.time())
+
         for tarea in tareas:
-            # Considerar fecha límite primero, si no, fecha de creación para filtrar por mes/año
             fecha_ref_str = tarea.get("fecha_limite") or tarea.get("fecha_creacion")
             if fecha_ref_str:
                 try:
                     fecha_obj = datetime.strptime(fecha_ref_str, '%Y-%m-%d %H:%M:%S')
-                    # Filtrar por mes y año
-                    if fecha_obj.month == mes and fecha_obj.year == anho:
-                        tareas_del_mes.append(tarea)
+                    # Filtrar si la fecha de la tarea está dentro del rango [inicio_dt, fin_dt]
+                    if inicio_dt <= fecha_obj <= fin_dt:
+                        tareas_del_periodo.append(tarea)
                 except ValueError:
-                    pass # Ignorar tareas con formato de fecha inválido
+                    # Podríamos intentar parsear solo la fecha si la hora falla
+                    try:
+                       fecha_obj_date = datetime.strptime(fecha_ref_str.split(" ")[0], '%Y-%m-%d').date()
+                       if fecha_inicio <= fecha_obj_date <= fecha_fin:
+                           tareas_del_periodo.append(tarea)
+                    except ValueError:
+                        pass # Ignorar tareas con formato de fecha inválido
 
-        # Ordenar tareas del mes: Pendientes primero, luego por fecha límite/creación, luego descripción
-        tareas_del_mes.sort(key=lambda t: (
+        # Ordenar tareas del período
+        tareas_del_periodo.sort(key=lambda t: (
             t.get("completada", False), # Pendientes (False=0) antes que completadas (True=1)
             t.get("fecha_limite") or t.get("fecha_creacion") or "9999", # Sin fecha al final
-            t.get("descripcion", "")
+            t.get("descripcion", "").lower() # Orden alfabético como último criterio
         ))
 
-        tareas_completadas = [t for t in tareas_del_mes if t.get("completada")]
-        tareas_pendientes = [t for t in tareas_del_mes if not t.get("completada")]
-        total_tareas = len(tareas_del_mes)
+        tareas_completadas = [t for t in tareas_del_periodo if t.get("completada")]
+        tareas_pendientes = [t for t in tareas_del_periodo if not t.get("completada")]
+        total_tareas = len(tareas_del_periodo)
         tasa_completitud = (len(tareas_completadas) / total_tareas * 100) if total_tareas > 0 else 0
 
-        # --- INICIO: Generar reporte HTML Mejorado ---
+        # --- INICIO: Generar reporte HTML (similar al anterior, pero con título dinámico) ---
         reporte_html = f"""
         <!DOCTYPE html>
         <html lang="es">
         <head>
             <meta charset="UTF-8">
-            <title>Reporte de Tareas - {mes_nombre} {anho}</title>
+            <title>Reporte de Tareas - {titulo_periodo}</title>
             <style>
+                /* --- Estilos CSS (los mismos que en generar_reporte_mensual) --- */
                 body {{
                     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                     line-height: 1.6;
@@ -409,11 +437,11 @@ def generar_reporte_mensual(mes, anho, email):
         <body>
             <div class="report-container">
                 <h1>Reporte de Tareas</h1>
-                <h2>{mes_nombre} {anho}</h2>
+                <h2>{titulo_periodo}</h2>
 
                 <div class="summary">
-                    <h3>Resumen del Mes</h3>
-                    <p><strong>Total de tareas en el mes:</strong> {total_tareas}</p>
+                    <h3>Resumen del Período</h3>
+                    <p><strong>Total de tareas en el período:</strong> {total_tareas}</p>
                     <p><strong>Tareas completadas:</strong> {len(tareas_completadas)}</p>
                     <p><strong>Tareas pendientes:</strong> {len(tareas_pendientes)}</p>
                     <p><strong>Tasa de completitud:</strong> {tasa_completitud:.1f}%</p>
@@ -424,7 +452,7 @@ def generar_reporte_mensual(mes, anho, email):
 
         if tareas_pendientes:
             reporte_html += "<ul>"
-            now_date = datetime.now().date()
+            now_date = datetime.now().date() # Fecha actual para comparar vencimiento
             for tarea in tareas_pendientes:
                 desc = html.escape(tarea.get('descripcion', 'Sin descripción'))
                 cat = html.escape(tarea.get('categoria', 'General'))
@@ -434,12 +462,12 @@ def generar_reporte_mensual(mes, anho, email):
                 status_class = "status-pending"
                 icon = "●" # Icono pendiente
 
-                # Verificar si está vencida
+                # Verificar si está vencida (comparando con la fecha actual, no con el fin del período)
                 is_overdue = False
                 if tarea.get("fecha_limite"):
                      try:
                          limite_dt = datetime.strptime(tarea.get("fecha_limite"), '%Y-%m-%d %H:%M:%S').date()
-                         if limite_dt < now_date:
+                         if limite_dt < now_date: # Comparar con hoy
                              status_class = "status-overdue"
                              icon = "✕" # Icono vencido
                              is_overdue = True
@@ -460,7 +488,7 @@ def generar_reporte_mensual(mes, anho, email):
                 """
             reporte_html += "</ul>"
         else:
-            reporte_html += "<p class='no-tasks'><i>¡Felicidades! Ninguna tarea pendiente este mes.</i></p>"
+            reporte_html += f"<p class='no-tasks'><i>¡Felicidades! Ninguna tarea pendiente para {periodo_tipo.lower()} {titulo_periodo}.</i></p>"
 
         reporte_html += f"<h3>Tareas Completadas ({len(tareas_completadas)})</h3>"
 
@@ -469,6 +497,7 @@ def generar_reporte_mensual(mes, anho, email):
             for tarea in tareas_completadas:
                 desc = html.escape(tarea.get('descripcion', 'Sin descripción'))
                 cat = html.escape(tarea.get('categoria', 'General'))
+                # Mostrar fecha límite o creación como referencia
                 fecha_info = tarea.get("fecha_limite") or tarea.get("fecha_creacion", "N/A")
                 fecha_display = fecha_info[:16] if fecha_info != "N/A" else "N/A"
                 reporte_html += f"""
@@ -485,18 +514,17 @@ def generar_reporte_mensual(mes, anho, email):
                 """
             reporte_html += "</ul>"
         else:
-            reporte_html += "<p class='no-tasks'><i>Ninguna tarea completada en este mes.</i></p>"
-
+            reporte_html += f"<p class='no-tasks'><i>Ninguna tarea completada para {periodo_tipo.lower()} {titulo_periodo}.</i></p>"
 
         reporte_html += """
             </div> </body>
         </html>"""
-        # --- FIN: Generar reporte HTML Mejorado ---
+        # --- FIN: Generar reporte HTML ---
         return reporte_html
 
     except FileNotFoundError:
          # Devolver HTML simple para errores
-        return f"<p style='color:orange; font-family: sans-serif;'>Aún no tienes tareas registradas para generar un reporte del mes {mes}/{anho}.</p>"
+        return f"<p style='color:orange; font-family: sans-serif;'>Aún no tienes tareas registradas ({email}) para generar un reporte.</p>"
     except json.JSONDecodeError:
         print(f"Error: Archivo corrupto para {email} al generar reporte.")
         return "<p style='color:red; font-family: sans-serif;'><b>Error interno al generar el reporte (archivo de tareas corrupto).</b></p>"
