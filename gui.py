@@ -1,13 +1,16 @@
-# gui.py (Optimización 2: Debouncing para Búsqueda)
+# gui.py (Modificado para selección de período en reportes y Debouncing)
 
 import sys
 import os
 import json
+# Añadir import de datetime y timedelta
 import datetime
+from datetime import timedelta
 import re
 import html
 from collections import defaultdict
 
+# Importaciones de PyQt5 (incluyendo QDateEdit)
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QTabWidget, QLabel, QPushButton, QLineEdit, QTextEdit,
                            QTableWidget, QTableWidgetItem, QCalendarWidget, QFrame,
@@ -15,24 +18,21 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                            QCheckBox, QComboBox, QGroupBox, QScrollArea, QStackedWidget,
                            QInputDialog, QDialogButtonBox, QDateTimeEdit, QHeaderView,
                            QMenuBar, QMenu, QAction, QSizePolicy,
-                           QAbstractItemView,
-                           QToolBar,
-                           QFileDialog, QProgressDialog)
-# Importaciones para QThread y QTimer
+                           QAbstractItemView, QToolBar, QFileDialog, QProgressDialog,
+                           QDateEdit) # Asegurarse que QDateEdit está importado
 from PyQt5.QtCore import (Qt, QDate, QTimer, pyqtSignal, QThread, QDateTime,
                           QTimeZone, QSize, QObject, pyqtSlot, QMetaObject)
-# ---------------------------------
 from PyQt5.QtGui import QIcon, QFont, QColor, QTextCharFormat, QPixmap
 
 # Importar módulos del proyecto
+# Actualizar la importación para usar la nueva función generar_reporte
 from commands import (agregar_tarea, eliminar_tarea, mostrar_tareas, modificar_tarea,
-                     marcar_como_completada, generar_reporte_mensual)
+                     marcar_como_completada, generar_reporte) # Importar la función refactorizada
 from user_management import UserManager
-# Importar funciones de sync directamente
 from google_drive_sync import sync_tasks_to_drive, sync_tasks_from_drive
 
 
-# --- Worker para Operaciones de Drive en Hilo Separado ---
+# --- Worker para Operaciones de Drive en Hilo Separado (Sin cambios) ---
 class DriveSyncWorker(QObject):
     # Señal emitida al finalizar una operación de sync
     # Argumentos: bool success, str message, str operation_type ('upload'/'download'/'initial_download')
@@ -101,7 +101,7 @@ class DriveSyncWorker(QObject):
 # --- Fin Worker ---
 
 
-# --- Diálogos (Sin cambios respecto a la versión anterior)---
+# --- Diálogos (LoginDialog, RegisterDialog, TaskDialog) (Sin cambios)---
 
 class LoginDialog(QDialog):
     def __init__(self, user_manager, parent=None):
@@ -272,7 +272,7 @@ class TaskDialog(QDialog):
         }
 
 
-# --- Clases para las Vistas (Widgets) (Modificada TasksViewWidget) ---
+# --- Clases para las Vistas (TasksViewWidget, CalendarViewWidget) (Sin cambios) ---
 
 class TasksViewWidget(QWidget):
     request_refresh_views = pyqtSignal()
@@ -283,28 +283,24 @@ class TasksViewWidget(QWidget):
         self.tasks_data = {"tareas": []}
         self.layout = QVBoxLayout(self)
 
-        # --- Timer para Debouncing de Búsqueda (NUEVO) ---
+        # --- Timer para Debouncing de Búsqueda ---
         self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True) # Solo se dispara una vez por intervalo
-        self.search_timer.setInterval(350) # Intervalo en milisegundos (ajustable)
-        self.search_timer.timeout.connect(self.refresh_tasks_display) # Llama a refresh al terminar el timer
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(350)
+        self.search_timer.timeout.connect(self.refresh_tasks_display)
         # -------------------------------------------------
 
-        # Título de la vista
         self.view_title = QLabel("Lista de Tareas", self)
         self.view_title.setObjectName("viewTitleLabel")
         self.view_title.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.view_title)
 
-        # Controles
         controls_group_box = QGroupBox("Controles")
         controls_layout = QHBoxLayout(controls_group_box)
 
         self.search_input = QLineEdit(self)
         self.search_input.setPlaceholderText("Buscar tarea...")
-        # --- Conectar textChanged al INICIO del timer (NUEVO) ---
         self.search_input.textChanged.connect(self.on_search_text_changed)
-        # -------------------------------------------------------
         controls_layout.addWidget(QLabel("Buscar:", self))
         controls_layout.addWidget(self.search_input, 1)
 
@@ -312,7 +308,6 @@ class TasksViewWidget(QWidget):
         controls_layout.addWidget(self.filter_label)
         self.category_filter_combo = QComboBox(self)
         self.category_filter_combo.addItem("Todas")
-        # Filtrado por categoría sigue siendo inmediato
         self.category_filter_combo.currentIndexChanged.connect(self.filter_by_category)
         controls_layout.addWidget(self.category_filter_combo)
 
@@ -323,7 +318,6 @@ class TasksViewWidget(QWidget):
 
         self.layout.addWidget(controls_group_box)
 
-        # Tabla de Tareas
         self.task_table = QTableWidget(self)
         self.task_table.setColumnCount(5)
         self.task_table.setHorizontalHeaderLabels(["Descripción", "Categoría", "Fecha Límite", "Completada", "Acciones"])
@@ -338,32 +332,24 @@ class TasksViewWidget(QWidget):
         self.layout.addWidget(self.task_table)
 
     def load_and_display_tasks(self):
-        """Carga las tareas y actualiza la tabla y filtros."""
         print("TasksViewWidget: load_and_display_tasks llamado")
         if self.user_manager.current_user:
             self.tasks_data = mostrar_tareas(self.user_manager.current_user)
             if not isinstance(self.tasks_data, dict) or "tareas" not in self.tasks_data:
                  print(f"Advertencia: formato inesperado de mostrar_tareas: {self.tasks_data}. Reiniciando a vacío.")
                  self.tasks_data = {"tareas": []}
-            # Llama a refresh para aplicar filtros y poblar tabla
             self.refresh_tasks_display()
         else:
             self.tasks_data = {"tareas": []}
             self.refresh_tasks_display()
 
-    # --- Slot para iniciar/reiniciar el timer de búsqueda (NUEVO) ---
     @pyqtSlot()
     def on_search_text_changed(self):
-        """Reinicia el temporizador de debouncing cada vez que el texto cambia."""
-        # print("Texto cambiado, reiniciando timer...") # Debug (puede ser muy verboso)
-        self.search_timer.start() # Reinicia el timer (o lo inicia si no estaba activo)
-    # --------------------------------------------------------------
+        self.search_timer.start()
 
     def refresh_tasks_display(self):
-        """Refresca la tabla y los filtros con los datos actuales en memoria."""
-        # Esta función ahora es llamada por el timer de búsqueda o por el cambio de categoría
         print("TasksViewWidget: refresh_tasks_display llamado (filtrando/actualizando tabla)")
-        search_term = self.search_input.text() # Obtiene el texto actual
+        search_term = self.search_input.text()
         current_category_filter = self.category_filter_combo.currentText()
 
         tareas_list = []
@@ -380,7 +366,6 @@ class TasksViewWidget(QWidget):
 
 
     def _filter_tasks(self, tasks, search_term, category):
-        """Filtra y ordena la lista de tareas."""
         filtered = tasks
         search_term_lower = search_term.lower().strip()
         category_lower = category.strip().lower()
@@ -401,10 +386,9 @@ class TasksViewWidget(QWidget):
 
 
     def populate_task_table(self, tasks):
-        """Llena la tabla QTableWidget con las tareas proporcionadas."""
         self.task_table.setRowCount(0)
         self.task_table.setRowCount(len(tasks))
-        now_date = datetime.datetime.now().date()
+        now_dt = datetime.datetime.now() # Usar datetime completo para comparar hora también si es necesario
 
         for row, task in enumerate(tasks):
             desc = task.get("descripcion", "")
@@ -432,10 +416,12 @@ class TasksViewWidget(QWidget):
                      item.setForeground(fg_color)
             elif fecha_lim:
                  try:
-                     limite_dt = datetime.datetime.strptime(fecha_lim, '%Y-%m-%d %H:%M:%S').date()
-                     if limite_dt < now_date:
+                     # Comparar con fecha y hora actual para vencimiento
+                     limite_dt = datetime.datetime.strptime(fecha_lim, '%Y-%m-%d %H:%M:%S')
+                     if limite_dt < now_dt:
                          fecha_item.setForeground(QColor("red"))
                          fecha_item.setFont(QFont(fecha_item.font().family(), -1, QFont.Bold))
+                         desc_item.setForeground(QColor("red")) # También marcar descripción
                  except ValueError:
                      pass
 
@@ -482,7 +468,6 @@ class TasksViewWidget(QWidget):
 
 
     def populate_category_filter(self, tasks, current_selection):
-        """Llena el QComboBox de filtro de categorías y restaura la selección."""
         self.category_filter_combo.blockSignals(True)
         self.category_filter_combo.clear()
         self.category_filter_combo.addItem("Todas")
@@ -501,18 +486,10 @@ class TasksViewWidget(QWidget):
         self.category_filter_combo.setCurrentIndex(index if index != -1 else 0)
         self.category_filter_combo.blockSignals(False)
 
-
-    # search_tasks ya no es necesario, on_search_text_changed maneja el inicio del timer
-    # def search_tasks(self):
-    #     self.refresh_tasks_display()
-
     def filter_by_category(self):
-        """Se llama cuando la categoría seleccionada cambia."""
-        # El filtrado por categoría sigue siendo inmediato
         self.refresh_tasks_display()
 
     def handle_add_task_dialog_show(self):
-        """Muestra el diálogo para agregar una nueva tarea."""
         dialog = TaskDialog(self.user_manager, parent=self)
         tareas_list = self.tasks_data.get("tareas", []) if isinstance(self.tasks_data, dict) else []
         all_categories = set()
@@ -528,7 +505,6 @@ class TasksViewWidget(QWidget):
 
 
     def handle_add_modify_task_dialog_result(self, dialog):
-         """Procesa el resultado del diálogo de agregar/modificar tarea."""
          if dialog.exec_() == QDialog.Accepted:
             task_data = dialog.get_task_data()
             description = task_data.get("descripcion")
@@ -559,7 +535,6 @@ class TasksViewWidget(QWidget):
 
 
     def complete_task(self, task_name):
-        """Marca una tarea como completada."""
         if not task_name: return
         print(f"Intentando completar tarea: '{task_name}'")
         if self.user_manager.current_user:
@@ -574,7 +549,6 @@ class TasksViewWidget(QWidget):
 
 
     def delete_task(self, task_name):
-        """Elimina una tarea previa confirmación."""
         if not task_name: return
         print(f"Intentando eliminar tarea: '{task_name}'")
         reply = QMessageBox.question(self, "Confirmar Eliminación",
@@ -593,7 +567,6 @@ class TasksViewWidget(QWidget):
 
 
     def modify_task(self, task_name):
-        """Abre el diálogo para modificar una tarea existente."""
         if not task_name: return
         print(f"Intentando modificar tarea: '{task_name}'")
         task_to_modify = None
@@ -624,8 +597,6 @@ class TasksViewWidget(QWidget):
         else:
             QMessageBox.warning(self, "Error", f"No se encontró la tarea '{task_name}' para modificar.")
 
-
-# --- CLASE CalendarViewWidget (Sin cambios respecto a la versión anterior) ---
 
 class CalendarViewWidget(QWidget):
     request_refresh_views = pyqtSignal()
@@ -814,10 +785,10 @@ class CalendarViewWidget(QWidget):
             else: QMessageBox.warning(self, "Entrada Inválida", "La descripción de la tarea no puede estar vacía.")
 
 
-# --- CLASE ReportsViewWidget (Sin cambios respecto a la versión anterior) ---
+# --- CLASE ReportsViewWidget (Modificada para selección de período) ---
 class ReportsViewWidget(QWidget):
-    reportGenerated = pyqtSignal(str)
-    request_report_generation = pyqtSignal(int, int, str)
+    # Señal actualizada para incluir tipo de periodo y fechas
+    request_report_generation = pyqtSignal(str, QDate, QDate, str) # periodo_tipo, fecha_inicio, fecha_fin, email
 
     def __init__(self, user_manager, parent=None):
         super().__init__(parent)
@@ -825,38 +796,83 @@ class ReportsViewWidget(QWidget):
         self.current_report_html = ""
         self.layout = QVBoxLayout(self)
 
+        # --- Configuración del Worker de Reportes ---
         self.report_thread = QThread(self)
-        self.report_worker = ReportGeneratorWorker()
+        self.report_worker = ReportGeneratorWorker() # Worker usará la nueva función generar_reporte
         self.report_worker.moveToThread(self.report_thread)
         self.report_worker.reportReady.connect(self.display_generated_report)
-        self.request_report_generation.connect(self.report_worker.generate_report)
+        # Conectar la nueva señal al slot del worker
+        self.request_report_generation.connect(self.report_worker.generate_report_slot)
         self.report_thread.finished.connect(self.report_worker.deleteLater)
         self.report_thread.finished.connect(self.report_thread.deleteLater)
         self.report_thread.start()
+        # --- Fin Configuración Worker ---
 
-        self.view_title = QLabel("Generar Reporte Mensual", self)
+        self.view_title = QLabel("Generar Reporte", self) # Título más genérico
         self.view_title.setObjectName("viewTitleLabel")
         self.view_title.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.view_title)
 
-        form_group_box = QGroupBox("Seleccionar Mes y Año")
+        # --- Controles de Selección de Período y Fecha ---
+        form_group_box = QGroupBox("Seleccionar Período y Fecha")
         self.report_form_layout = QFormLayout(form_group_box)
+
+        # 1. Selector de Tipo de Reporte
+        self.period_type_combo = QComboBox(self)
+        self.period_type_combo.addItems(["Diario", "Semanal", "Mensual"])
+        self.period_type_combo.currentIndexChanged.connect(self.update_date_selectors)
+        self.report_form_layout.addRow("Tipo de Reporte:", self.period_type_combo)
+
+        # 2. Contenedores para selectores de fecha (apilados)
+        self.date_selectors_stack = QStackedWidget(self)
+        self.report_form_layout.addRow(self.date_selectors_stack)
+
+        #    2a. Selector Diario (QDateEdit)
+        self.daily_selector_widget = QWidget()
+        daily_layout = QFormLayout(self.daily_selector_widget)
+        daily_layout.setContentsMargins(0, 0, 0, 0)
+        self.daily_date_edit = QDateEdit(self)
+        self.daily_date_edit.setCalendarPopup(True)
+        self.daily_date_edit.setDate(QDate.currentDate())
+        self.daily_date_edit.setDisplayFormat("yyyy-MM-dd")
+        daily_layout.addRow("Seleccionar Día:", self.daily_date_edit)
+        self.date_selectors_stack.addWidget(self.daily_selector_widget)
+
+        #    2b. Selector Semanal (QDateEdit - elige un día de la semana)
+        self.weekly_selector_widget = QWidget()
+        weekly_layout = QFormLayout(self.weekly_selector_widget)
+        weekly_layout.setContentsMargins(0, 0, 0, 0)
+        self.weekly_date_edit = QDateEdit(self)
+        self.weekly_date_edit.setCalendarPopup(True)
+        self.weekly_date_edit.setDate(QDate.currentDate())
+        self.weekly_date_edit.setDisplayFormat("yyyy-MM-dd")
+        # Usar QCalendarWidget integrado para mejor UX semanal si se desea más adelante
+        weekly_layout.addRow("Día de la Semana:", self.weekly_date_edit)
+        self.date_selectors_stack.addWidget(self.weekly_selector_widget)
+
+        #    2c. Selector Mensual (Mes y Año - como antes)
+        self.monthly_selector_widget = QWidget()
+        monthly_layout = QFormLayout(self.monthly_selector_widget)
+        monthly_layout.setContentsMargins(0, 0, 0, 0)
         self.month_combo = QComboBox(self)
         meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
         self.month_combo.addItems(meses)
         self.month_combo.setCurrentIndex(datetime.datetime.now().month - 1)
-        self.report_form_layout.addRow("Mes:", self.month_combo)
+        monthly_layout.addRow("Mes:", self.month_combo)
         self.year_input = QLineEdit(self)
         self.year_input.setText(str(datetime.datetime.now().year))
         self.year_input.setPlaceholderText("Año (ej. 2024)")
         self.year_input.setStyleSheet("QLineEdit { background-color: white; color: black; }")
-        self.report_form_layout.addRow("Año:", self.year_input)
+        monthly_layout.addRow("Año:", self.year_input)
+        self.date_selectors_stack.addWidget(self.monthly_selector_widget)
+        # --- Fin Controles de Selección ---
 
+        # Botones de Acción (Generar/Exportar)
         action_layout = QHBoxLayout()
         icon_report = QIcon("icons/report.png") if os.path.exists("icons/report.png") else QIcon.fromTheme("document-print")
         icon_save = QIcon("icons/save.png") if os.path.exists("icons/save.png") else QIcon.fromTheme("document-save")
         self.generate_button = QPushButton(icon_report, " Generar Reporte", self)
-        self.generate_button.clicked.connect(self.request_report_generation_slot)
+        self.generate_button.clicked.connect(self.request_report_generation_slot) # Slot modificado
         action_layout.addWidget(self.generate_button)
         self.export_button = QPushButton(icon_save, " Exportar HTML", self)
         self.export_button.clicked.connect(self.export_report_to_html)
@@ -866,7 +882,8 @@ class ReportsViewWidget(QWidget):
         self.report_form_layout.addRow(action_layout)
         self.layout.addWidget(form_group_box)
 
-        self.report_title = QLabel("Reporte Mensual", self)
+        # Área de visualización del reporte
+        self.report_title = QLabel("Reporte", self) # Título se actualizará dinámicamente
         self.report_title.setObjectName("reportTitleLabel")
         self.report_title.setAlignment(Qt.AlignCenter)
         self.report_title.hide()
@@ -875,88 +892,196 @@ class ReportsViewWidget(QWidget):
         self.report_text_edit.setReadOnly(True)
         self.layout.addWidget(self.report_text_edit)
 
+        # Inicializar la vista de selectores de fecha
+        self.update_date_selectors()
+
+    @pyqtSlot()
+    def update_date_selectors(self):
+        """Muestra los selectores de fecha apropiados según el tipo de reporte."""
+        index = self.period_type_combo.currentIndex()
+        self.date_selectors_stack.setCurrentIndex(index)
+
     @pyqtSlot()
     def request_report_generation_slot(self):
+        """Obtiene las fechas según el período seleccionado y emite la señal."""
         self.report_text_edit.clear()
         self.current_report_html = ""
         self.export_button.setEnabled(False)
         self.generate_button.setEnabled(False)
         self.report_title.hide()
+
+        periodo_tipo_index = self.period_type_combo.currentIndex()
+        # Usar minúsculas consistentes para el tipo
+        periodo_tipo_str = self.period_type_combo.itemText(periodo_tipo_index).lower()
+        fecha_inicio = None
+        fecha_fin = None
+
         try:
-            month = self.month_combo.currentIndex() + 1
-            year_str = self.year_input.text().strip()
-            if not year_str or not year_str.isdigit():
-                 QMessageBox.warning(self, "Entrada Inválida", "Por favor, introduce un año numérico válido.")
-                 self.generate_button.setEnabled(True); return
-            year = int(year_str)
-            if not (1900 < year < 2200):
-                 QMessageBox.warning(self, "Año Inválido", "Introduce un año válido (ej. 1980-2199).")
-                 self.generate_button.setEnabled(True); return
-            if self.user_manager.current_user:
-                 print(f"ReportsViewWidget: Emitiendo request_report_generation para {month}/{year}")
-                 self.request_report_generation.emit(month, year, self.user_manager.current_user)
-            else:
+            if periodo_tipo_index == 0: # Diario
+                fecha_seleccionada_q = self.daily_date_edit.date()
+                fecha_inicio = fecha_seleccionada_q.toPyDate() # Convertir QDate a datetime.date
+                fecha_fin = fecha_inicio # Para diario, inicio y fin son el mismo día
+
+            elif periodo_tipo_index == 1: # Semanal
+                fecha_seleccionada_q = self.weekly_date_edit.date()
+                # Calcular inicio de semana (lunes) y fin de semana (domingo)
+                # dayOfWeek() devuelve 1 para Lunes, 7 para Domingo
+                dia_semana = fecha_seleccionada_q.dayOfWeek()
+                # Restar días para llegar al Lunes
+                fecha_inicio_q = fecha_seleccionada_q.addDays(-(dia_semana - 1))
+                # Sumar días para llegar al Domingo
+                fecha_fin_q = fecha_seleccionada_q.addDays(7 - dia_semana)
+                fecha_inicio = fecha_inicio_q.toPyDate()
+                fecha_fin = fecha_fin_q.toPyDate()
+
+            elif periodo_tipo_index == 2: # Mensual
+                month = self.month_combo.currentIndex() + 1
+                year_str = self.year_input.text().strip()
+                if not year_str or not year_str.isdigit():
+                    raise ValueError("Año inválido. Introduce un número.")
+                year = int(year_str)
+                # Validar rango razonable de años
+                if not (1900 < year < 2200):
+                    raise ValueError("Año fuera de rango (1901-2199).")
+                # Calcular primer y último día del mes usando datetime.date
+                fecha_inicio = datetime.date(year, month, 1)
+                # Calcular último día: ir al primer día del mes siguiente y restar un día
+                if month == 12:
+                    # Si es diciembre, el mes siguiente es enero del próximo año
+                    fecha_fin = datetime.date(year, 12, 31)
+                else:
+                    # Para otros meses, simplemente ir al día 1 del mes siguiente y restar 1 día
+                    fecha_fin = datetime.date(year, month + 1, 1) - timedelta(days=1)
+
+            # --- Emisión de la señal ---
+            # Validar que tenemos fechas antes de emitir
+            if fecha_inicio and fecha_fin and self.user_manager.current_user:
+                 print(f"ReportsViewWidget: Emitiendo request_report_generation para {periodo_tipo_str}, {fecha_inicio} a {fecha_fin}")
+                 # Emitir con QDate ya que el worker espera QDate según la firma de la señal
+                 self.request_report_generation.emit(periodo_tipo_str, QDate(fecha_inicio), QDate(fecha_fin), self.user_manager.current_user)
+            elif not self.user_manager.current_user:
                  QMessageBox.warning(self, "Usuario No Identificado", "Debes iniciar sesión para generar reportes.")
                  self.generate_button.setEnabled(True)
-        except ValueError:
-            QMessageBox.warning(self, "Entrada Inválida", "Introduce un año numérico válido.")
+            else:
+                 # Esto no debería ocurrir si la lógica anterior es correcta
+                 QMessageBox.warning(self, "Error Interno", "No se pudieron determinar las fechas para el reporte.")
+                 self.generate_button.setEnabled(True)
+
+        except ValueError as ve:
+            QMessageBox.warning(self, "Entrada Inválida", f"Por favor, verifica las fechas o el año introducido.\nDetalle: {ve}")
             self.generate_button.setEnabled(True)
         except Exception as e:
-             QMessageBox.critical(self, "Error Inesperado", f"Ocurrió un error antes de generar el reporte:\n{e}")
+             QMessageBox.critical(self, "Error Inesperado", f"Ocurrió un error al preparar el reporte:\n{e}")
              self.generate_button.setEnabled(True)
+
 
     @pyqtSlot(str)
     def display_generated_report(self, reporte_html):
+        """Muestra el reporte generado y actualiza el título."""
         print("ReportsViewWidget: Recibido reportReady del worker.")
         self.current_report_html = reporte_html
-        month_name = self.month_combo.currentText()
-        year_str = self.year_input.text().strip()
-        self.report_title.setText(f"Reporte - {month_name} {year_str}")
+
+        # Extraer título del HTML si es posible, o construir uno genérico
+        title_match = re.search(r"<title>(.*?)</title>", reporte_html, re.IGNORECASE | re.DOTALL)
+        report_display_title = title_match.group(1).strip() if title_match else "Reporte Generado"
+
+        self.report_title.setText(report_display_title) # Usar título del HTML
         self.report_title.show()
         self.report_text_edit.setHtml(reporte_html)
+        # Habilitar exportación solo si el HTML parece válido
         self.export_button.setEnabled(bool(reporte_html and "<html" in reporte_html.lower()))
-        self.generate_button.setEnabled(True)
+        self.generate_button.setEnabled(True) # Reactivar botón de generar
 
     def export_report_to_html(self):
+        """Exporta el reporte HTML actual a un archivo."""
         if not self.current_report_html:
             QMessageBox.warning(self, "Sin Reporte", "Primero genera un reporte para poder exportarlo.")
             return
-        default_filename = f"Reporte_Tareas_{self.month_combo.currentText()}_{self.year_input.text()}.html"
+
+        # Crear nombre de archivo por defecto más descriptivo
+        periodo_tipo = self.period_type_combo.currentText()
+        fecha_str = ""
+        try:
+            if periodo_tipo == "Diario":
+                fecha_str = self.daily_date_edit.date().toString("yyyyMMdd")
+            elif periodo_tipo == "Semanal":
+                # Usar la fecha de inicio de la semana calculada
+                fecha_sel_q = self.weekly_date_edit.date()
+                dia_sem = fecha_sel_q.dayOfWeek()
+                inicio_sem_q = fecha_sel_q.addDays(-(dia_sem - 1))
+                fecha_str = inicio_sem_q.toString("yyyyMMdd") + "_Semana"
+            elif periodo_tipo == "Mensual":
+                fecha_str = f"{self.year_input.text()}{self.month_combo.currentIndex()+1:02d}"
+            else: # Fallback genérico
+                 fecha_str = QDate.currentDate().toString("yyyyMMdd")
+
+            default_filename = f"Reporte_Tareas_{periodo_tipo}_{fecha_str}.html"
+        except Exception: # En caso de error al formar el nombre
+            default_filename = "Reporte_Tareas.html"
+
+
         options = QFileDialog.Options()
         fileName, _ = QFileDialog.getSaveFileName(self, "Guardar Reporte HTML", default_filename,
                                                   "Archivos HTML (*.html);;Todos los Archivos (*)", options=options)
         if fileName:
             try:
-                with open(fileName, 'w', encoding='utf-8') as f: f.write(self.current_report_html)
+                # Asegurar que la extensión sea .html
+                if not fileName.lower().endswith(".html"):
+                    fileName += ".html"
+                with open(fileName, 'w', encoding='utf-8') as f:
+                    f.write(self.current_report_html)
                 QMessageBox.information(self, "Éxito", f"Reporte guardado exitosamente en:\n{fileName}")
             except Exception as e:
                 QMessageBox.critical(self, "Error al Guardar", f"No se pudo guardar el archivo:\n{e}")
 
     def __del__(self):
+        # Limpieza del hilo del worker
         print("Destruyendo ReportsViewWidget, deteniendo hilo de reporte...")
         if hasattr(self, 'report_thread') and self.report_thread.isRunning():
             self.report_thread.quit()
-            if not self.report_thread.wait(1000):
-                print("Advertencia: Hilo de reporte no terminó, terminando forzosamente.")
-                self.report_thread.terminate(); self.report_thread.wait()
+            # Esperar un tiempo razonable para que termine limpiamente
+            if not self.report_thread.wait(1500): # Aumentar tiempo de espera si es necesario
+                print("Advertencia: Hilo de reporte no terminó limpiamente, terminando forzosamente.")
+                self.report_thread.terminate()
+                self.report_thread.wait() # Esperar a que termine forzosamente
         print("Hilo de reporte detenido.")
 
-# --- Worker simple para Generar Reportes (Sin cambios) ---
-class ReportGeneratorWorker(QObject):
-    reportReady = pyqtSignal(str)
-    @pyqtSlot(int, int, str)
-    def generate_report(self, mes, anho, email):
-        print(f"ReportWorker: Generando reporte para {mes}/{anho}, email: {email}")
-        try:
-            reporte_html = generar_reporte_mensual(mes, anho, email)
-            print("ReportWorker: Reporte generado, emitiendo señal.")
-            self.reportReady.emit(reporte_html)
-        except Exception as e:
-            error_html = f"<p style='color:red; font-family: sans-serif;'><b>Error interno inesperado al generar el reporte en el worker:</b><br>{html.escape(str(e))}</p>"
-            print(f"ReportWorker: Error durante generación: {e}")
-            self.reportReady.emit(error_html)
 
-# --- Ventana Principal Contenedora (TaskCalendarWindow) (Sin cambios respecto a la versión anterior) ---
+# --- Worker para Generar Reportes (Modificado para usar la nueva función) ---
+class ReportGeneratorWorker(QObject):
+    reportReady = pyqtSignal(str) # La señal solo emite el HTML resultante
+
+    # Nuevo slot que acepta los parámetros de la señal modificada de ReportsViewWidget
+    @pyqtSlot(str, QDate, QDate, str)
+    def generate_report_slot(self, periodo_tipo, fecha_inicio_q, fecha_fin_q, email):
+        """Slot que recibe la señal y llama a la función de backend."""
+        print(f"ReportWorker: Recibida solicitud para reporte {periodo_tipo} ({fecha_inicio_q.toString()} a {fecha_fin_q.toString()}) para {email}")
+        try:
+            # Convertir QDate de nuevo a datetime.date para la función de backend 'generar_reporte'
+            fecha_inicio_dt = fecha_inicio_q.toPyDate()
+            fecha_fin_dt = fecha_fin_q.toPyDate()
+
+            # Llamar a la función genérica 'generar_reporte' del módulo commands
+            reporte_html = generar_reporte(periodo_tipo, fecha_inicio_dt, fecha_fin_dt, email)
+
+            print("ReportWorker: Reporte generado, emitiendo señal reportReady.")
+            self.reportReady.emit(reporte_html) # Emitir el HTML generado
+
+        except Exception as e:
+            # Crear un HTML de error para mostrar en la interfaz
+            error_html = f"""
+            <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Error al Generar Reporte</title></head>
+            <body style="font-family: sans-serif;">
+            <h2 style='color:red;'>Error al Generar Reporte ({html.escape(periodo_tipo)})</h2>
+            <p>Ocurrió un error inesperado durante la generación del reporte en segundo plano:</p>
+            <pre style='background-color:#fdd; border: 1px solid red; padding: 10px;'>{html.escape(str(e))}</pre>
+            </body></html>
+            """
+            print(f"ReportWorker: Error crítico durante generación: {e}")
+            self.reportReady.emit(error_html) # Emitir el HTML de error
+
+
+# --- Ventana Principal Contenedora (TaskCalendarWindow) (Sin cambios necesarios aquí) ---
 class TaskCalendarWindow(QMainWindow):
     tasks_updated_signal = pyqtSignal()
     request_final_sync = pyqtSignal()
@@ -994,7 +1119,7 @@ class TaskCalendarWindow(QMainWindow):
 
         self.action_show_tasks = QAction(icon_tasks, "Tareas", self); self.action_show_tasks.setToolTip("Mostrar Lista de Tareas"); self.action_show_tasks.triggered.connect(lambda: self.change_view(0)); self.tool_bar.addAction(self.action_show_tasks)
         self.action_show_calendar = QAction(icon_calendar, "Calendario", self); self.action_show_calendar.setToolTip("Mostrar Calendario de Tareas"); self.action_show_calendar.triggered.connect(lambda: self.change_view(1)); self.tool_bar.addAction(self.action_show_calendar)
-        self.action_show_reports = QAction(icon_reports, "Reportes", self); self.action_show_reports.setToolTip("Generar Reportes Mensuales"); self.action_show_reports.triggered.connect(lambda: self.change_view(2)); self.tool_bar.addAction(self.action_show_reports)
+        self.action_show_reports = QAction(icon_reports, "Reportes", self); self.action_show_reports.setToolTip("Generar Reportes"); self.action_show_reports.triggered.connect(lambda: self.change_view(2)); self.tool_bar.addAction(self.action_show_reports)
         self.tool_bar.addSeparator()
         self.action_sync_from = QAction(icon_download, "Descargar de Drive", self); self.action_sync_from.setToolTip("Sincronizar Tareas DESDE Google Drive (Descargar)"); self.action_sync_from.triggered.connect(self.sync_from_drive_action); self.tool_bar.addAction(self.action_sync_from)
         self.action_sync_to = QAction(icon_upload, "Subir a Drive", self); self.action_sync_to.setToolTip("Sincronizar Tareas HACIA Google Drive (Subir)"); self.action_sync_to.triggered.connect(self.sync_to_drive_action); self.tool_bar.addAction(self.action_sync_to)
@@ -1007,20 +1132,27 @@ class TaskCalendarWindow(QMainWindow):
 
         self.tasks_view = TasksViewWidget(self.user_manager, parent=self)
         self.calendar_view = CalendarViewWidget(self.user_manager, parent=self)
-        self.reports_view = ReportsViewWidget(self.user_manager, parent=self)
+        self.reports_view = ReportsViewWidget(self.user_manager, parent=self) # Ya modificado arriba
 
         self.views_stack.addWidget(self.tasks_view)
         self.views_stack.addWidget(self.calendar_view)
         self.views_stack.addWidget(self.reports_view)
 
+        # Conexiones de señales
         self.tasks_updated_signal.connect(self.tasks_view.load_and_display_tasks)
         self.tasks_updated_signal.connect(self.calendar_view.load_and_display_tasks)
+        # Conectar refresh requests a la función local de refresh
         self.tasks_view.request_refresh_views.connect(self.refresh_views_local)
         self.calendar_view.request_refresh_views.connect(self.refresh_views_local)
+        # La conexión para reportes ya está dentro de ReportsViewWidget
 
+        # Timer para notificaciones (si se usa)
         self.notification_timer = QTimer(self); self.notification_timer.timeout.connect(self.check_upcoming_tasks_for_notification); self.checked_tasks_for_notification = set()
+        # Iniciar carga inicial y vista
         self.load_tasks_initial()
         self.change_view(0)
+        # Descomentar para activar notificaciones periódicas (ej. cada 5 minutos)
+        # self.notification_timer.start(300000) # 300000 ms = 5 minutos
 
     def change_view(self, index):
         self.views_stack.setCurrentIndex(index)
@@ -1057,32 +1189,51 @@ class TaskCalendarWindow(QMainWindow):
         if operation_type == 'initial_download':
             if success:
                  print("Descarga inicial exitosa, refrescando vistas...")
-                 self.tasks_updated_signal.emit()
+                 self.tasks_updated_signal.emit() # Refrescar vistas con datos descargados
             else:
-                 if "Error" in message: QMessageBox.warning(self, "Sincronización Inicial Fallida", f"No se pudieron descargar las tareas de Google Drive al iniciar.\nDetalle: {message}\n\nSe mostrarán las tareas locales.")
-                 else: print(f"Info Sync Inicial: {message}")
+                 # Si falló la descarga inicial, mostrar mensaje pero cargar locales igualmente
+                 if "Error" in message:
+                     QMessageBox.warning(self, "Sincronización Inicial Fallida", f"No se pudieron descargar las tareas de Google Drive al iniciar.\nDetalle: {message}\n\nSe mostrarán las tareas locales si existen.")
+                 else: # Mensaje informativo (ej. no hay archivo en Drive)
+                     print(f"Info Sync Inicial: {message}")
+                 # Cargar tareas locales igualmente
                  self.tasks_updated_signal.emit()
-            return
+            return # Fin del manejo de descarga inicial
+
+        # Manejo de sync manual (upload/download)
         if success:
             QMessageBox.information(self, "Sincronización Exitosa", f"Operación ({operation_type}) completada:\n{message}")
+            # Si fue una descarga manual exitosa, refrescar las vistas
             if operation_type == 'download':
                 print("Descarga manual exitosa, refrescando vistas...")
                 self.tasks_updated_signal.emit()
         else:
+            # Si falló una operación manual
             QMessageBox.warning(self, "Error de Sincronización", f"Falló la operación ({operation_type}):\n{message}")
-            if operation_type == 'download' and "Error" not in message: self.tasks_updated_signal.emit()
+            # Si falló una descarga, puede ser informativo ("local es más reciente"), refrescar por si acaso
+            if operation_type == 'download' and "local es igual o más reciente" in message:
+                 self.tasks_updated_signal.emit()
+
+        # Manejo de logout pendiente después de sync final
         if self.logout_pending and operation_type == 'upload':
             print("Sincronización final completada, procediendo con logout...")
             self.logout_pending = False
-            self.perform_logout_steps()
+            self.perform_logout_steps() # Ejecutar los pasos de cierre de sesión
+
 
     def load_tasks_initial(self):
         if self.user_manager.current_user and not self.is_syncing:
             print("TaskCalendarWindow: Solicitando descarga INICIAL en hilo...")
             self.is_syncing = True; self.set_sync_buttons_enabled(False)
+            # Usar invokeMethod para llamar al slot del worker en su hilo
             QMetaObject.invokeMethod(self.drive_worker, "do_initial_sync_download", Qt.QueuedConnection)
-        elif self.is_syncing: print("Advertencia: Intento de carga inicial mientras otra sync está en curso.")
-        else: print("Carga inicial: No hay usuario logueado."); self.tasks_updated_signal.emit()
+        elif self.is_syncing:
+             print("Advertencia: Intento de carga inicial mientras otra sync está en curso.")
+        else:
+             # No hay usuario logueado, simplemente cargar vistas (estarán vacías)
+             print("Carga inicial: No hay usuario logueado.")
+             self.tasks_updated_signal.emit()
+
 
     def logout(self):
         reply = QMessageBox.question(self, 'Cerrar Sesión', '¿Estás seguro de que quieres cerrar sesión?\nSe intentará guardar tus últimas tareas en Google Drive antes de salir.', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1091,84 +1242,134 @@ class TaskCalendarWindow(QMainWindow):
                   if not self.is_syncing:
                        print("Cerrando sesión: Solicitando sincronización final HACIA Drive...")
                        self.is_syncing = True; self.logout_pending = True; self.set_sync_buttons_enabled(False)
-                       self.centralWidget().setEnabled(False)
+                       self.centralWidget().setEnabled(False) # Deshabilitar UI mientras se guarda
                        QMessageBox.information(self, "Cerrando Sesión", "Guardando tareas en Google Drive...")
-                       self.request_final_sync.emit()
-                  else: QMessageBox.warning(self, "Operación en Curso", "Espera a que termine la sincronización actual antes de cerrar sesión."); return
-             else: self.perform_logout_steps()
+                       self.request_final_sync.emit() # Emitir señal para que el worker suba
+                  else:
+                      # Si ya hay una sincronización, no permitir logout hasta que termine
+                      QMessageBox.warning(self, "Operación en Curso", "Espera a que termine la sincronización actual antes de cerrar sesión.")
+                      return # No continuar con el logout
+             else:
+                  # Si no hay usuario logueado, simplemente cerrar
+                  self.perform_logout_steps()
 
     def perform_logout_steps(self):
+         """Pasos reales para cerrar sesión y la ventana."""
          print("Ejecutando pasos finales de logout...")
+         # Realizar logout en user_manager
          self.user_manager.logout()
          print("Sesión cerrada en UserManager.")
+         # Reactivar UI por si acaso (aunque se cerrará)
          self.centralWidget().setEnabled(True)
-         self.close()
+         # Cerrar esta ventana
+         self.close() # Esto debería disparar closeEvent
 
     def set_sync_buttons_enabled(self, enabled):
         self.action_sync_from.setEnabled(enabled)
         self.action_sync_to.setEnabled(enabled)
 
     def check_upcoming_tasks_for_notification(self):
+        """Verifica tareas próximas y muestra notificaciones (si el timer está activo)."""
         if not self.user_manager.current_user: return
         print("Chequeando tareas para notificación...")
-        current_tasks_data = mostrar_tareas(self.user_manager.current_user)
-        upcoming_tasks_to_notify = []; now = datetime.datetime.now(); notified_this_cycle = set()
-        tareas_list = current_tasks_data.get("tareas", []) if isinstance(current_tasks_data, dict) else []
-        for tarea in tareas_list:
-            if not tarea.get("completada", False):
-                fecha_limite_str = tarea.get("fecha_limite")
-                task_identifier = (tarea.get("descripcion", ""), fecha_limite_str)
-                if task_identifier in notified_this_cycle: continue
-                if fecha_limite_str and isinstance(fecha_limite_str, str):
-                    try:
-                        fecha_limite = datetime.datetime.strptime(fecha_limite_str, '%Y-%m-%d %H:%M:%S')
-                        time_difference = fecha_limite - now
-                        if timedelta(0) < time_difference <= timedelta(days=1):
-                            if task_identifier not in self.checked_tasks_for_notification:
-                                upcoming_tasks_to_notify.append(tarea)
-                                self.checked_tasks_for_notification.add(task_identifier)
-                                notified_this_cycle.add(task_identifier)
-                    except ValueError: pass
-        for tarea in upcoming_tasks_to_notify:
-             fecha_limite_str = tarea.get("fecha_limite")
-             if fecha_limite_str:
-                 try:
-                     fecha_limite = datetime.datetime.strptime(fecha_limite_str, '%Y-%m-%d %H:%M:%S')
-                     time_diff = fecha_limite - now; time_message = ""
-                     if time_diff.total_seconds() > 0:
-                         days=time_diff.days; hours,rem=divmod(time_diff.seconds,3600); minutes,_=divmod(rem,60)
-                         parts=[];
-                         if days > 0: parts.append(f"{days} día{'s' if days > 1 else ''}")
-                         if hours > 0: parts.append(f"{hours} hora{'s' if hours > 1 else ''}")
-                         if minutes > 0: parts.append(f"{minutes} minuto{'s' if minutes > 1 else ''}")
-                         time_until = " y ".join(filter(None,[", ".join(parts[:-1]),parts[-1]])) if parts else "menos de un minuto"
-                         time_message = f"Faltan {time_until}."
-                     else: time_message = "¡Fecha límite pasada!"
-                     msg = (f"<b>¡Recordatorio de Tarea!</b><br><br>"
-                            f"<b>Tarea:</b> {html.escape(tarea.get('descripcion', 'N/A'))}<br>"
-                            f"<b>Límite:</b> {fecha_limite_str}<br><br>"
-                            f"<i>{time_message}</i>")
-                     QMessageBox.information(self, f"Recordatorio: {html.escape(tarea.get('descripcion', 'Tarea'))}", msg)
-                 except ValueError: pass
+        try:
+            current_tasks_data = mostrar_tareas(self.user_manager.current_user)
+            upcoming_tasks_to_notify = []
+            now = datetime.datetime.now()
+            notified_this_cycle = set() # Para evitar duplicados en la misma verificación
+            tareas_list = current_tasks_data.get("tareas", []) if isinstance(current_tasks_data, dict) else []
+
+            for tarea in tareas_list:
+                if not tarea.get("completada", False):
+                    fecha_limite_str = tarea.get("fecha_limite")
+                    # Usar descripción y fecha como identificador único de la tarea para la notificación
+                    task_identifier = (tarea.get("descripcion", ""), fecha_limite_str)
+
+                    if task_identifier in notified_this_cycle: continue # Ya notificada en este ciclo
+
+                    if fecha_limite_str and isinstance(fecha_limite_str, str):
+                        try:
+                            fecha_limite = datetime.datetime.strptime(fecha_limite_str, '%Y-%m-%d %H:%M:%S')
+                            time_difference = fecha_limite - now
+
+                            # Notificar si falta 1 día o menos (y no ha pasado)
+                            # Y si no ha sido notificada antes (usando self.checked_tasks_for_notification)
+                            if timedelta(0) < time_difference <= timedelta(days=1):
+                                if task_identifier not in self.checked_tasks_for_notification:
+                                    upcoming_tasks_to_notify.append(tarea)
+                                    # Añadir a la lista de notificadas permanentemente
+                                    self.checked_tasks_for_notification.add(task_identifier)
+                                    # Añadir a la lista de notificadas en este ciclo
+                                    notified_this_cycle.add(task_identifier)
+                        except ValueError:
+                            # Ignorar tareas con formato de fecha inválido para notificaciones
+                            pass
+
+            # Mostrar las notificaciones encontradas
+            for tarea in upcoming_tasks_to_notify:
+                 fecha_limite_str = tarea.get("fecha_limite") # Re-obtener por claridad
+                 if fecha_limite_str:
+                     try:
+                         fecha_limite = datetime.datetime.strptime(fecha_limite_str, '%Y-%m-%d %H:%M:%S')
+                         time_diff = fecha_limite - now; time_message = ""
+
+                         if time_diff.total_seconds() > 0:
+                             # Calcular tiempo restante de forma legible
+                             days=time_diff.days; hours,rem=divmod(time_diff.seconds,3600); minutes,_=divmod(rem,60)
+                             parts=[]
+                             if days > 0: parts.append(f"{days} día{'s' if days > 1 else ''}")
+                             if hours > 0: parts.append(f"{hours} hora{'s' if hours > 1 else ''}")
+                             if minutes > 0: parts.append(f"{minutes} minuto{'s' if minutes > 1 else ''}")
+                             if not parts and time_diff.total_seconds() > 0: parts.append("menos de un minuto")
+                             # Unir las partes con comas y 'y'
+                             if len(parts) > 1: time_until = ", ".join(parts[:-1]) + " y " + parts[-1]
+                             elif parts: time_until = parts[0]
+                             else: time_until = "un instante" # Fallback
+                             time_message = f"Faltan {time_until}."
+                         else:
+                             # Esto no debería ocurrir si filtramos por time_difference > 0
+                             time_message = "¡Fecha límite pasada!"
+
+                         # Crear mensaje HTML para el QMessageBox
+                         msg_title = f"Recordatorio: {html.escape(tarea.get('descripcion', 'Tarea'))}"
+                         msg_body = (f"<b>¡Recordatorio de Tarea Próxima!</b><br><br>"
+                                f"<b>Tarea:</b> {html.escape(tarea.get('descripcion', 'N/A'))}<br>"
+                                f"<b>Categoría:</b> {html.escape(tarea.get('categoria', 'General'))}<br>"
+                                f"<b>Límite:</b> {fecha_limite_str}<br><br>"
+                                f"<i>{time_message}</i>")
+                         # Mostrar notificación informativa
+                         QMessageBox.information(self, msg_title, msg_body)
+                     except ValueError: pass # Ignorar error de formato de fecha
+        except Exception as e:
+            print(f"Error inesperado al chequear notificaciones: {e}")
+
 
     def closeEvent(self, event):
+        """Manejador del evento de cierre de la ventana."""
         print("Cerrando ventana TaskCalendarWindow...")
+        # Detener timers
         self.notification_timer.stop()
-        if self.drive_thread.isRunning():
-            print("Deteniendo hilo de Drive...")
+
+        # Detener hilos secundarios limpiamente
+        print("Deteniendo hilo de Drive...")
+        if hasattr(self, 'drive_thread') and self.drive_thread.isRunning():
             self.drive_thread.quit()
-            if not self.drive_thread.wait(3000):
+            if not self.drive_thread.wait(3000): # Esperar 3 segundos
                  print("Advertencia: El hilo de Drive no terminó limpiamente, terminando forzosamente.")
-                 self.drive_thread.terminate(); self.drive_thread.wait()
+                 self.drive_thread.terminate()
+                 self.drive_thread.wait()
             print("Hilo de Drive detenido.")
-        if hasattr(self.reports_view, 'report_thread') and self.reports_view.report_thread.isRunning():
-            print("Deteniendo hilo de Reportes...")
-            self.reports_view.report_thread.quit()
-            if not self.reports_view.report_thread.wait(1000):
-                print("Advertencia: Hilo de reporte no terminó, terminando forzosamente.")
-                self.reports_view.report_thread.terminate(); self.reports_view.report_thread.wait()
-            print("Hilo de Reportes detenido.")
+        else:
+            print("Hilo de Drive no encontrado o no estaba corriendo.")
+
+        # Detener hilo de reportes (llamando al __del__ implícito del widget al cerrar)
+        # La limpieza del hilo de reportes ya está en el __del__ de ReportsViewWidget
+        print("La limpieza del hilo de Reportes se maneja en su widget.")
+
+        # Aceptar el evento de cierre
         event.accept()
+        print("Evento de cierre aceptado.")
+
 
 # --- Ventana Principal de Inicio (MainWindow) (Sin cambios) ---
 class MainWindow(QMainWindow):
@@ -1202,7 +1403,8 @@ class MainWindow(QMainWindow):
 
     def show_login_dialog(self):
         dialog = LoginDialog(self.user_manager, self)
-        if dialog.exec_() == QDialog.Accepted and self.user_manager.current_user: self.show_task_calendar_window()
+        if dialog.exec_() == QDialog.Accepted and self.user_manager.current_user:
+            self.show_task_calendar_window()
 
     def show_register_dialog(self):
         dialog = RegisterDialog(self.user_manager, self); dialog.exec_()
@@ -1210,28 +1412,58 @@ class MainWindow(QMainWindow):
     def show_task_calendar_window(self):
         if self.task_calendar_window is None or not self.task_calendar_window.isVisible():
             self.task_calendar_window = TaskCalendarWindow(self.user_manager)
+            # Conectar la señal destroyed para saber cuándo se cierra la ventana de tareas
             self.task_calendar_window.destroyed.connect(self.on_task_window_closed)
-            self.task_calendar_window.show(); self.hide()
+            self.task_calendar_window.show()
+            self.hide() # Ocultar la ventana de login/registro
 
     @pyqtSlot()
     def on_task_window_closed(self):
+        """Se llama cuando la ventana TaskCalendarWindow se cierra."""
         print("Ventana de tareas cerrada. Mostrando ventana de inicio.")
-        self.task_calendar_window = None
-        if not self.isVisible(): self.show()
+        self.task_calendar_window = None # Liberar la referencia
+        # Volver a mostrar la ventana de inicio si no está visible
+        if not self.isVisible():
+            self.show()
 
 # --- Carga QSS y Punto de Entrada Principal (Sin cambios) ---
 def load_stylesheet(filepath):
+    """Carga una hoja de estilos QSS desde un archivo."""
     try:
-        with open(filepath, "r", encoding="utf-8") as f: return f.read()
-    except FileNotFoundError: print(f"Advertencia: Hoja de estilos '{filepath}' no encontrada."); return ""
-    except Exception as e: print(f"Advertencia: No se pudo cargar la hoja de estilos '{filepath}'. Error: {e}"); return ""
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        print(f"Advertencia: Hoja de estilos '{filepath}' no encontrada.")
+        return ""
+    except Exception as e:
+        print(f"Advertencia: No se pudo cargar la hoja de estilos '{filepath}'. Error: {e}")
+        return ""
 
 if __name__ == "__main__":
-    try: os.makedirs("usuarios", exist_ok=True); print("Directorio 'usuarios' verificado/creado.")
-    except Exception as e: print(f"Error crítico al crear el directorio 'usuarios': {e}"); sys.exit(1)
+    # Asegurar que el directorio de usuarios existe
+    try:
+        os.makedirs("usuarios", exist_ok=True)
+        print("Directorio 'usuarios' verificado/creado.")
+    except Exception as e:
+        print(f"Error crítico al crear el directorio 'usuarios': {e}")
+        sys.exit(1) # Salir si no se puede crear el directorio base
+
+    # Crear la aplicación Qt
     app = QApplication(sys.argv)
+
+    # Cargar y aplicar hoja de estilos si existe
     stylesheet = load_stylesheet("styles.qss")
-    if stylesheet: app.setStyleSheet(stylesheet); print("Hoja de estilos 'styles.qss' aplicada.")
-    else: print("No se aplicó hoja de estilos externa."); app.setStyle("Fusion")
+    if stylesheet:
+        app.setStyleSheet(stylesheet)
+        print("Hoja de estilos 'styles.qss' aplicada.")
+    else:
+        # Usar un estilo por defecto si no hay QSS
+        print("No se encontró 'styles.qss'. Usando estilo Fusion por defecto.")
+        app.setStyle("Fusion")
+
+    # Crear y mostrar la ventana principal de inicio/login
     window = MainWindow()
+    # window.show() # show() ya se llama dentro de __init__ de MainWindow
+
+    # Ejecutar el bucle de eventos de la aplicación
     sys.exit(app.exec_())
