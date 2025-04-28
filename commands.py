@@ -1,458 +1,507 @@
+# commands.py (Completo y Actualizado con reporte mejorado)
+
 import json
 import os
-from datetime import datetime, timedelta # Importar timedelta para calcular fechas futuras
+from datetime import datetime, timedelta # Importar timedelta
+import html # Importar para escapar caracteres HTML
+
+# --- Funciones de Manejo de Archivos y Tareas ---
 
 def crear_archivo_tareas_si_no_existe(ruta_archivo):
-    """Crea el archivo de tareas si no existe"""
-    os.makedirs(os.path.dirname(ruta_archivo), exist_ok=True)
+    """Crea el archivo de tareas si no existe, incluyendo el directorio del usuario."""
+    user_dir = os.path.dirname(ruta_archivo)
+    os.makedirs(user_dir, exist_ok=True) # Crea el directorio si no existe
     if not os.path.exists(ruta_archivo):
-        with open(ruta_archivo, "w") as file:
-            json.dump({"tareas": []}, file, indent=4)
+        try:
+            with open(ruta_archivo, "w", encoding='utf-8') as file:
+                json.dump({"tareas": []}, file, indent=4, ensure_ascii=False)
+            print(f"Archivo de tareas creado en: {ruta_archivo}")
+        except IOError as e:
+            print(f"Error al crear el archivo de tareas {ruta_archivo}: {e}")
 
-# Modificar la función agregar_tarea para aceptar categoria y fecha_limite
-def agregar_tarea(tarea, categoria, fecha_limite, email):
-    """Agrega una nueva tarea a la lista con categoría y fecha límite"""
+def agregar_tarea(tarea, categoria, fecha_limite, email, completada=False):
+    """Agrega una nueva tarea a la lista del usuario."""
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
+    crear_archivo_tareas_si_no_existe(ruta_archivo) # Asegura que el archivo y directorio existan
+
     try:
-        with open(ruta_archivo, "r+") as file:
-            data = json.load(file)
-            # Verifica si la tarea ya existe (sólo comparando descripción)
-            tareas_desc = [t["descripcion"].lower() for t in data["tareas"] if "descripcion" in t] # Comparar en minúsculas
-            if tarea.lower() in tareas_desc: # Comparar la nueva tarea en minúsculas
-                return f"La tarea '{tarea}' ya existe en tu lista"
+        # Leer el archivo actual
+        try:
+            with open(ruta_archivo, "r", encoding='utf-8') as file:
+                data = json.load(file)
+                # Asegurar que 'tareas' exista y sea una lista
+                if "tareas" not in data or not isinstance(data["tareas"], list):
+                    data["tareas"] = []
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"Error al leer {ruta_archivo} o archivo corrupto ({e}). Reiniciando.")
+            data = {"tareas": []} # Reiniciar si hay error
 
-            # Validar formato de fecha límite si se proporciona
-            fecha_limite_str = None
-            if fecha_limite:
-                try:
-                    # Intentar parsear la fecha para asegurarse de que sea válida
-                    datetime.strptime(fecha_limite, "%Y-%m-%d %H:%M:%S")
-                    fecha_limite_str = fecha_limite
-                except ValueError:
-                    return f"Formato de fecha y hora inválido para la fecha límite. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
+        # Verificar si la tarea ya existe (insensible a mayúsculas/minúsculas y espacios)
+        tareas_desc = [t["descripcion"].strip().lower() for t in data.get("tareas", []) if "descripcion" in t]
+        if tarea.strip().lower() in tareas_desc:
+            return False, f"La tarea '{tarea}' ya existe en tu lista."
 
+        # Validar y formatear fecha límite si existe
+        fecha_limite_str = None
+        if fecha_limite:
+             try:
+                 # Intentar parsear la fecha y hora
+                 dt_obj = datetime.strptime(fecha_limite, '%Y-%m-%d %H:%M:%S')
+                 fecha_limite_str = dt_obj.strftime('%Y-%m-%d %H:%M:%S') # Reformatear por si acaso
+             except ValueError:
+                 print(f"Advertencia: Formato de fecha límite inválido: {fecha_limite}. No se guardará la fecha.")
+                 fecha_limite_str = None # Ignorar fecha inválida
 
-            # Agregar la tarea con información adicional
-            nueva_tarea = {
-                "descripcion": tarea,
-                "fecha_creacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "fecha_limite": fecha_limite_str, # Usar la fecha límite validada o None
-                "completada": False,
-                "categoria": categoria if categoria else "general", # Usar la categoría proporcionada o "general" por defecto
-            }
+        # Crear la nueva tarea
+        nueva_tarea = {
+            "descripcion": tarea.strip(),
+            "categoria": categoria.strip() if categoria else "General", # Categoría por defecto
+            "fecha_creacion": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "fecha_limite": fecha_limite_str,
+            "completada": completada # Estado inicial
+        }
 
-            data["tareas"].append(nueva_tarea)
-            file.seek(0)
-            json.dump(data, file, indent=4)
-            file.truncate()
-        return f"Tarea agregada: {tarea}"
+        # Añadir la nueva tarea a la lista
+        data["tareas"].append(nueva_tarea)
+
+        # Guardar los datos actualizados en el archivo
+        with open(ruta_archivo, "w", encoding='utf-8') as file:
+            json.dump(data, file, indent=4, ensure_ascii=False)
+
+        return True, f"Tarea '{tarea}' agregada correctamente."
+
+    except IOError as e:
+        print(f"Error de E/S al agregar tarea en {ruta_archivo}: {e}")
+        return False, "Error interno al guardar la tarea (IOError)."
     except Exception as e:
-        print(f"Error al agregar tarea: {e}")
-        return "No se pudo agregar la tarea"
+        print(f"Error inesperado al agregar tarea para {email}: {e}")
+        return False, "Error interno inesperado al agregar la tarea."
 
-def eliminar_tarea(tarea, email):
-    """Elimina una tarea de la lista"""
+
+def eliminar_tarea(tarea_a_eliminar, email):
+    """Elimina una tarea de la lista del usuario."""
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
+    if not os.path.exists(ruta_archivo):
+        return False, "No se encontraron tareas para este usuario."
+
     try:
-        with open(ruta_archivo, "r+") as file:
+        # Leer el archivo
+        with open(ruta_archivo, "r", encoding='utf-8') as file:
             data = json.load(file)
+            if "tareas" not in data or not isinstance(data["tareas"], list):
+                print(f"Advertencia: Formato inválido en {ruta_archivo}. Reiniciando.")
+                data = {"tareas": []}
 
-            # Buscar la tarea por descripción (comparación parcial e insensible a mayúsculas)
-            tarea_encontrada = None
-            index = -1
-            for i, t in enumerate(data["tareas"]):
-                if tarea.lower() in t.get("descripcion", "").lower(): # Buscar parcial e insensible a mayúsculas
-                    tarea_encontrada = t
-                    index = i
-                    break # Eliminar solo la primera coincidencia si hay varias
-
-            if tarea_encontrada:
-                data["tareas"].pop(index) # Usar pop con índice es más seguro después de encontrar
-                file.seek(0)
-                json.dump(data, file, indent=4)
-                file.truncate()
-                return f"Tarea eliminada: {tarea_encontrada['descripcion']}" # Usar la descripción exacta encontrada
+        tareas_originales = data.get("tareas", [])
+        tarea_encontrada = False
+        # Crear nueva lista sin la tarea a eliminar (insensible a mayúsculas/minúsculas)
+        nuevas_tareas = []
+        for t in tareas_originales:
+            if "descripcion" in t and t["descripcion"].strip().lower() == tarea_a_eliminar.strip().lower():
+                tarea_encontrada = True
+                print(f"Tarea '{tarea_a_eliminar}' encontrada para eliminar.")
             else:
-                 # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
-                 for i, t in enumerate(data["tareas"]):
-                     if tarea.lower() == t.get("descripcion", "").lower():
-                         tarea_encontrada = t
-                         index = i
-                         break
+                nuevas_tareas.append(t)
 
-                 if tarea_encontrada:
-                     data["tareas"].pop(index)
-                     file.seek(0)
-                     json.dump(data, file, indent=4)
-                     file.truncate()
-                     return f"Tarea eliminada: {tarea_encontrada['descripcion']}"
-                 else:
-                    return "Tarea no encontrada."
+        if tarea_encontrada:
+            data["tareas"] = nuevas_tareas
+            # Guardar la lista actualizada
+            with open(ruta_archivo, "w", encoding='utf-8') as file:
+                json.dump(data, file, indent=4, ensure_ascii=False)
+            return True, f"Tarea '{tarea_a_eliminar}' eliminada correctamente."
+        else:
+            return False, f"La tarea '{tarea_a_eliminar}' no se encontró en tu lista."
+
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error al leer/escribir o archivo corrupto {ruta_archivo} al eliminar: {e}")
+        return False, "Error interno al eliminar (archivo corrupto o problema de I/O)."
     except Exception as e:
-        print(f"Error al eliminar tarea: {e}")
-        return "No se pudo eliminar la tarea"
+        print(f"Error inesperado al eliminar tarea: {e}")
+        return False, "Error interno inesperado al eliminar la tarea."
 
 
 def mostrar_tareas(email):
-    """Muestra todas las tareas pendientes y completadas"""
+    """Muestra todas las tareas del usuario, devolviendo dict {tareas: []} o vacío si falla."""
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
     try:
-        with open(ruta_archivo, "r") as file:
+        with open(ruta_archivo, "r", encoding='utf-8') as file:
             data = json.load(file)
-            if data["tareas"]:
-                tareas_pendientes = [t["descripcion"] for t in data["tareas"] if not t.get("completada")]
-                tareas_completadas = [t["descripcion"] for t in data["tareas"] if t.get("completada")]
-
-                respuesta = ""
-                if tareas_pendientes:
-                    respuesta += "Tareas pendientes: " + ", ".join(tareas_pendientes)
-                if tareas_completadas:
-                    if respuesta:
-                        respuesta += "\n" # Añadir salto de línea si hay tareas pendientes
-                    respuesta += "Tareas completadas: " + ", ".join(tareas_completadas)
-
-                if not respuesta:
-                     respuesta = "No hay tareas en tu lista."
-
-                return respuesta
-            else:
-                return "No hay tareas en tu lista."
+            # Validar estructura básica
+            if not isinstance(data, dict) or "tareas" not in data or not isinstance(data["tareas"], list):
+                print(f"Advertencia: Formato inesperado en {ruta_archivo} para {email}. Devolviendo vacío.")
+                return {"tareas": []}
+            return data # Devuelve el diccionario completo {"tareas": [...]}
+    except FileNotFoundError:
+        print(f"Archivo de tareas no encontrado para {email}. Devolviendo lista vacía.")
+        # Devolver estructura esperada aunque esté vacía
+        return {"tareas": []}
+    except json.JSONDecodeError:
+        print(f"Error: Archivo de tareas corrupto para {email}. Devolviendo lista vacía.")
+        return {"tareas": []}
     except Exception as e:
-        print(f"Error al mostrar tareas: {e}")
-        return "No se pudieron mostrar las tareas"
+        print(f"Error inesperado al cargar tareas para {email}: {e}")
+        return {"tareas": []}
 
 
-def modificar_tarea(tarea_vieja, tarea_nueva, email):
-    """Modifica una tarea existente"""
+def modificar_tarea(nombre_tarea_original, nuevos_datos_tarea, email):
+    """Modifica una tarea existente con nuevos datos."""
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
+    if not os.path.exists(ruta_archivo):
+        return False, "No se encontraron tareas para este usuario."
+
     try:
-        with open(ruta_archivo, "r+") as file:
+        # Leer archivo
+        with open(ruta_archivo, "r", encoding='utf-8') as file:
             data = json.load(file)
+            if "tareas" not in data or not isinstance(data["tareas"], list):
+                 print(f"Advertencia: Formato inválido en {ruta_archivo} al modificar. Reiniciando.")
+                 data = {"tareas": []}
 
-            # Buscar la tarea por descripción (insensible a mayúsculas y parcial)
-            tarea_encontrada = None
-            index = -1
-            for i, t in enumerate(data["tareas"]):
-                if tarea_vieja.lower() in t.get("descripcion", "").lower(): # Buscar parcial e insensible a mayúsculas
-                    tarea_encontrada = t
-                    index = i
-                    break # Modificar solo la primera coincidencia
+        tareas = data.get("tareas", [])
+        tarea_encontrada_index = -1
+        # Buscar la tarea por descripción original (insensible a mayúsculas/minúsculas)
+        nombre_original_lower = nombre_tarea_original.strip().lower()
+        for i, t in enumerate(tareas):
+            if "descripcion" in t and t["descripcion"].strip().lower() == nombre_original_lower:
+                tarea_encontrada_index = i
+                break
 
-            if tarea_encontrada:
-                # Mantener los otros datos de la tarea, solo cambiar descripción
-                data["tareas"][index]["descripcion"] = tarea_nueva
-                file.seek(0)
-                json.dump(data, file, indent=4)
-                file.truncate()
-                return f"Tarea modificada: '{tarea_encontrada['descripcion']}' -> '{tarea_nueva}'"
-            else:
-                # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
-                 for i, t in enumerate(data["tareas"]):
-                     if tarea_vieja.lower() == t.get("descripcion", "").lower():
-                         tarea_encontrada = t
-                         index = i
-                         break
+        if tarea_encontrada_index != -1:
+            tarea_a_modificar = tareas[tarea_encontrada_index]
+            print(f"Modificando tarea: {tarea_a_modificar}")
 
-                 if tarea_encontrada:
-                     data["tareas"][index]["descripcion"] = tarea_nueva
-                     file.seek(0)
-                     json.dump(data, file, indent=4)
-                     file.truncate()
-                     return f"Tarea modificada: '{tarea_encontrada['descripcion']}' -> '{tarea_nueva}'"
+            # Actualizar campos si están presentes en nuevos_datos_tarea
+            if "descripcion" in nuevos_datos_tarea:
+                 nueva_desc = nuevos_datos_tarea["descripcion"].strip()
+                 if nueva_desc: # No permitir descripción vacía
+                     tarea_a_modificar["descripcion"] = nueva_desc
                  else:
-                    return "Tarea no encontrada para modificar."
+                     return False, "La nueva descripción no puede estar vacía."
+
+            if "categoria" in nuevos_datos_tarea:
+                tarea_a_modificar["categoria"] = nuevos_datos_tarea["categoria"].strip() if nuevos_datos_tarea["categoria"] else "General"
+
+            if "fecha_limite" in nuevos_datos_tarea:
+                nueva_fecha_limite_str = nuevos_datos_tarea["fecha_limite"]
+                if nueva_fecha_limite_str:
+                     try:
+                         # Validar y reformatear la nueva fecha
+                         dt_obj = datetime.strptime(nueva_fecha_limite_str, '%Y-%m-%d %H:%M:%S')
+                         tarea_a_modificar["fecha_limite"] = dt_obj.strftime('%Y-%m-%d %H:%M:%S')
+                     except ValueError:
+                         print(f"Advertencia: Formato de nueva fecha inválido: {nueva_fecha_limite_str}. No se actualiza la fecha.")
+                         # Decidir si mantener la anterior o ponerla a None
+                         # Mantengamos la anterior por ahora si la nueva es inválida
+                         pass
+                else:
+                     # Si se pasa una cadena vacía o None, quitar la fecha límite
+                     tarea_a_modificar["fecha_limite"] = None
+
+            if "completada" in nuevos_datos_tarea:
+                # Asegurarse de que sea un booleano
+                tarea_a_modificar["completada"] = bool(nuevos_datos_tarea["completada"])
+
+            print(f"Tarea después de modificar: {tarea_a_modificar}")
+
+            # Guardar los cambios
+            with open(ruta_archivo, "w", encoding='utf-8') as file:
+                json.dump(data, file, indent=4, ensure_ascii=False)
+
+            return True, f"Tarea '{nombre_tarea_original}' modificada correctamente."
+        else:
+            return False, f"La tarea '{nombre_tarea_original}' no se encontró para modificar."
+
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error al leer/escribir o archivo corrupto {ruta_archivo} al modificar: {e}")
+        return False, "Error interno al modificar (archivo corrupto o problema de I/O)."
     except Exception as e:
-        print(f"Error al modificar tarea: {e}")
-        return "No se pudo modificar la tarea"
+        print(f"Error inesperado al modificar tarea: {e}")
+        return False, "Error interno inesperado al modificar la tarea."
 
 
-def agregar_recordatorio(tarea, fecha_limite, email):
-    """Agrega una fecha límite a una tarea existente (sin sincronización con Google)"""
+def marcar_como_completada(tarea_a_completar, email):
+    """Marca una tarea como completada en la lista."""
     ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
-    try:
-        with open(ruta_archivo, "r+") as file:
-            data = json.load(file)
-
-            # Buscar la tarea por descripción (insensible a mayúsculas y parcial)
-            tarea_encontrada = None
-            index = -1
-            for i, t in enumerate(data["tareas"]):
-                if tarea.lower() in t.get("descripcion", "").lower(): # Buscar parcial e insensible a mayúsculas
-                    tarea_encontrada = t
-                    index = i
-                    break # Agregar recordatorio solo a la primera coincidencia
-
-            if tarea_encontrada:
-                # Validar y agregar fecha límite
-                try:
-                    # Intentar parsear la fecha para asegurarse de que sea válida
-                    datetime.strptime(fecha_limite, "%Y-%m-%d %H:%M:%S")
-                    data["tareas"][index]["fecha_limite"] = fecha_limite
-
-                    # Eliminar la bandera de sincronización de Google si existía
-                    if "sincronizado_calendario" in data["tareas"][index]:
-                        del data["tareas"][index]["sincronizado_calendario"]
-
-                    file.seek(0)
-                    json.dump(data, file, indent=4)
-                    file.truncate()
-
-                    return f"Fecha límite agregada para: '{tarea_encontrada['descripcion']}' - Fecha: {fecha_limite}"
-                except ValueError:
-                    return f"Formato de fecha y hora inválido. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
-
-            else:
-                # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
-                 for i, t in enumerate(data["tareas"]):
-                     if tarea.lower() == t.get("descripcion", "").lower():
-                         tarea_encontrada = t
-                         index = i
-                         break
-                 if tarea_encontrada:
-                      try:
-                         datetime.strptime(fecha_limite, "%Y-%m-%d %H:%M:%S")
-                         data["tareas"][index]["fecha_limite"] = fecha_limite
-
-                         if "sincronizado_calendario" in data["tareas"][index]:
-                             del data["tareas"][index]["sincronizado_calendario"]
-
-                         file.seek(0)
-                         json.dump(data, file, indent=4)
-                         file.truncate()
-                         return f"Fecha límite agregada para: '{tarea_encontrada['descripcion']}' - Fecha: {fecha_limite}"
-                      except ValueError:
-                         return f"Formato de fecha y hora inválido. Usa %Y-%m-%d %H:%M:%S (Ej: 2023-10-27 10:30:00)."
-                 else:
-                     return "Tarea no encontrada para agregar recordatorio."
-    except Exception as e:
-        print(f"Error al agregar recordatorio: {e}")
-        return "No se pudo agregar el recordatorio"
-
-
-def cambiar_categoria(tarea, categoria, email):
-    """Cambia la categoría de una tarea"""
-    ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
-    try:
-        with open(ruta_archivo, "r+") as file:
-            data = json.load(file)
-
-            # Buscar la tarea por descripción (insensible a mayúsculas y parcial)
-            tarea_encontrada = None
-            index = -1
-            for i, t in enumerate(data["tareas"]):
-                if tarea.lower() in t.get("descripcion", "").lower(): # Buscar parcial e insensible a mayúsculas
-                    tarea_encontrada = t
-                    index = i
-                    break # Cambiar categoría solo a la primera coincidencia
-
-            if tarea_encontrada:
-                # Cambiar categoría
-                data["tareas"][index]["categoria"] = categoria
-                file.seek(0)
-                json.dump(data, file, indent=4)
-                file.truncate()
-                return f"Categoría cambiada para: '{tarea_encontrada['descripcion']}' - Nueva categoría: {categoria}"
-            else:
-                 # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
-                 for i, t in enumerate(data["tareas"]):
-                     if tarea.lower() == t.get("descripcion", "").lower():
-                         tarea_encontrada = t
-                         index = i
-                         break
-                 if tarea_encontrada:
-                     data["tareas"][index]["categoria"] = categoria
-                     file.seek(0)
-                     json.dump(data, file, indent=4)
-                     file.truncate()
-                     return f"Categoría cambiada para: '{tarea_encontrada['descripcion']}' - Nueva categoría: {categoria}"
-                 else:
-                     return "Tarea no encontrada para cambiar categoría."
-    except Exception as e:
-        print(f"Error al cambiar categoría: {e}")
-        return "No se pudo cambiar la categoría"
-
-
-def marcar_como_completada(tarea, email):
-    """Marca una tarea como completada"""
-    ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
-    try:
-        with open(ruta_archivo, "r+") as file:
-            data = json.load(file)
-
-            # Buscar la tarea por descripción (insensible a mayúsculas y parcial)
-            tarea_encontrada = None
-            index = -1
-            for i, t in enumerate(data["tareas"]):
-                if tarea.lower() in t.get("descripcion", "").lower(): # Buscar parcial e insensible a mayúsculas
-                    tarea_encontrada = t
-                    index = i
-                    break # Marcar como completada solo la primera coincidencia
-
-            if tarea_encontrada:
-                # Marcar como completada
-                data["tareas"][index]["completada"] = True
-                file.seek(0)
-                json.dump(data, file, indent=4)
-                file.truncate()
-                return f"Tarea marcada como completada: '{tarea_encontrada['descripcion']}'"
-            else:
-                 # Si no se encontró por coincidencia parcial, buscar exacta (insensible a mayúsculas)
-                 for i, t in enumerate(data["tareas"]):
-                     if tarea.lower() == t.get("descripcion", "").lower():
-                         tarea_encontrada = t
-                         index = i
-                         break
-                 if tarea_encontrada:
-                     data["tareas"][index]["completada"] = True
-                     file.seek(0)
-                     json.dump(data, file, indent=4)
-                     file.truncate()
-                     return f"Tarea marcada como completada: '{tarea_encontrada['descripcion']}'"
-                 else:
-                     return "Tarea no encontrada para marcar como completada."
-    except Exception as e:
-        print(f"Error al marcar tarea como completada: {e}")
-        return "No se pudo marcar la tarea como completada"
-
-def mostrar_tareas_por_categoria(categoria, email):
-    """Muestra las tareas de una categoría específica"""
-    ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
-    try:
-        with open(ruta_archivo, "r") as file:
-            data = json.load(file)
-            # Filtrar por categoría (insensible a mayúsculas)
-            tareas_categoria = [t for t in data["tareas"] if t.get("categoria", "").lower() == categoria.lower()]
-            if tareas_categoria:
-                respuesta = f"Tareas de categoría '{categoria}':\n"
-                for tarea in tareas_categoria:
-                     estado = "✓" if tarea.get("completada") else " "
-                     fecha_limite = f" (Fecha límite: {tarea['fecha_limite']})" if tarea.get("fecha_limite") else ""
-                     respuesta += f"- [{estado}] {tarea['descripcion']}{fecha_limite}\n"
-                return respuesta.strip() # Eliminar el último salto de línea
-            else:
-                return f"No hay tareas en la categoría '{categoria}'."
-    except Exception as e:
-        print(f"Error al mostrar tareas por categoría: {e}")
-        return "No se pudieron mostrar las tareas por categoría"
-
-# Funciones relacionadas con calendario y recordatorios (adaptadas o eliminadas)
-
-def mostrar_tareas_calendario_local(email):
-    """Muestra las tareas con fecha límite en formato de lista por fecha (local)"""
-    ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
-    try:
-        with open(ruta_archivo, "r") as file:
-            data = json.load(file)
-
-            # Filtrar tareas con fecha límite
-            tareas_con_fecha = [t for t in data["tareas"] if t.get("fecha_limite")]
-
-            if not tareas_con_fecha:
-                return "No hay tareas con fecha límite para mostrar en el calendario local."
-
-            # Organizar por fecha y hora
-            tareas_con_fecha.sort(key=lambda x: datetime.strptime(x["fecha_limite"], "%Y-%m-%d %H:%M:%S"))
-
-            resultado = "Tareas con fecha límite:\n\n"
-            fecha_actual = None
-            for tarea in tareas_con_fecha:
-                fecha_limite_dt = datetime.strptime(tarea["fecha_limite"], "%Y-%m-%d %H:%M:%S")
-                fecha = fecha_limite_dt.strftime("%Y-%m-%d")
-                hora = fecha_limite_dt.strftime("%H:%M")
-                estado = "✓" if tarea.get("completada") else " "
-
-                if fecha != fecha_actual:
-                    resultado += f"--- {fecha} ---\n"
-                    fecha_actual = fecha
-
-                resultado += f"[{estado}] {hora} - {tarea['descripcion']} ({tarea['categoria']})\n"
-
-            return resultado.strip()
-
-    except Exception as e:
-        print(f"Error al mostrar tareas en calendario local: {e}")
-        return "No se pudieron mostrar las tareas en formato calendario local."
-
-# La función mostrar_tareas_formato_calendario ya trabaja con datos locales, se mantiene igual
-
-# Las funciones sincronizar_todas_tareas_calendario y enviar_recordatorios_email se eliminan
-# ya que dependían de calendar_integration.py
-
-# --- Nueva función para generar reporte mensual ---
-
-def generar_reporte_mensual(email, año, mes):
-    """Genera un reporte de tareas completadas y pendientes para un mes dado."""
-    ruta_archivo = f"usuarios/{email}/tareas.json"
-    crear_archivo_tareas_si_no_existe(ruta_archivo)
+    if not os.path.exists(ruta_archivo):
+        return False, "No se encontraron tareas para este usuario."
 
     try:
-        with open(ruta_archivo, "r") as file:
+        with open(ruta_archivo, "r+", encoding='utf-8') as file: # Abrir en modo lectura/escritura
             data = json.load(file)
+            if "tareas" not in data or not isinstance(data["tareas"], list):
+                 print(f"Advertencia: Formato inválido en {ruta_archivo} al completar. Reiniciando.")
+                 data = {"tareas": []}
+
             tareas = data.get("tareas", [])
+            tarea_encontrada = False
+            tarea_a_completar_lower = tarea_a_completar.strip().lower()
 
-            # Filtrar tareas por año y mes en la fecha de creación o fecha límite
-            tareas_del_mes = []
-            for tarea in tareas:
-                # Considerar fecha de creación o fecha límite para el reporte mensual
-                fecha_str = tarea.get("fecha_limite") or tarea.get("fecha_creacion")
-                if fecha_str:
-                    try:
-                        # Asegurarse de que la cadena tenga el formato esperado antes de dividir
-                        if " " in fecha_str and len(fecha_str.split(" ")[0]) == 10:
-                            fecha_dt = datetime.strptime(fecha_str.split(" ")[0], "%Y-%m-%d")
-                            if fecha_dt.year == año and fecha_dt.month == mes:
-                                tareas_del_mes.append(tarea)
-                        # Manejar casos donde solo hay fecha (sin hora) si es necesario
-                        elif len(fecha_str) == 10: # %Y-%m-%d
-                             fecha_dt = datetime.strptime(fecha_str, "%Y-%m-%d")
-                             if fecha_dt.year == año and fecha_dt.month == mes:
-                                tareas_del_mes.append(tarea)
+            for t in tareas:
+                 if "descripcion" in t and t["descripcion"].strip().lower() == tarea_a_completar_lower:
+                     if not t.get("completada", False): # Marcar solo si no estaba ya completada
+                         t["completada"] = True
+                         tarea_encontrada = True
+                         print(f"Marcando como completada: {t}")
+                         break # Terminar bucle una vez encontrada y marcada
+                     else:
+                         # Si ya estaba completada, considerarlo éxito pero informar
+                         return True, f"La tarea '{tarea_a_completar}' ya estaba marcada como completada."
 
-                    except ValueError:
-                        # Ignorar tareas con formatos de fecha inválidos
-                        pass
-
-            if not tareas_del_mes:
-                return f"No hay tareas registradas o con fecha límite en el mes {mes} del año {año}."
-
-            # Separar por estado
-            tareas_completadas = [t for t in tareas_del_mes if t.get("completada")]
-            tareas_pendientes = [t for t in tareas_del_mes if not t.get("completada")]
-
-            # Generar reporte
-            reporte = f"--- Reporte de Tareas - Mes {mes}/{año} ---\n\n"
-
-            reporte += f"Tareas Completadas ({len(tareas_completadas)}):\n"
-            if tareas_completadas:
-                for tarea in tareas_completadas:
-                    fecha_info = tarea.get("fecha_limite") or tarea.get("fecha_creacion", "Fecha no disponible")
-                    reporte += f"- [✓] {tarea['descripcion']} (Categoría: {tarea.get('categoria', 'N/A')}, Fecha: {fecha_info})\n"
+            if tarea_encontrada:
+                # Rebobinar y escribir todo el archivo actualizado
+                file.seek(0)
+                json.dump(data, file, indent=4, ensure_ascii=False)
+                file.truncate() # Asegurar que no queden restos del archivo viejo
+                return True, f"Tarea '{tarea_a_completar}' marcada como completada."
             else:
-                reporte += "  Ninguna tarea completada en este mes.\n"
+                return False, f"La tarea '{tarea_a_completar}' no se encontró en tu lista."
 
-            reporte += f"\nTareas Pendientes ({len(tareas_pendientes)}):\n"
-            if tareas_pendientes:
-                for tarea in tareas_pendientes:
-                     fecha_info = tarea.get("fecha_limite") or tarea.get("fecha_creacion", "Fecha no disponible")
-                     reporte += f"- [ ] {tarea['descripcion']} (Categoría: {tarea.get('categoria', 'N/A')}, Fecha límite: {fecha_info})\n"
-            else:
-                reporte += "  Ninguna tarea pendiente en este mes.\n"
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error al leer/escribir o archivo corrupto {ruta_archivo} al completar: {e}")
+        return False, "Error interno al marcar completada (archivo corrupto o problema de I/O)."
+    except Exception as e:
+        print(f"Error inesperado al marcar como completada: {e}")
+        return False, "Error interno inesperado al marcar la tarea como completada."
 
-            reporte += "\n------------------------------\n"
 
-            return reporte
+# --- Función de Reporte Mejorada ---
+def generar_reporte_mensual(mes, anho, email):
+    """Genera un reporte HTML mejorado de tareas para un mes y año dados."""
+    ruta_archivo = f"usuarios/{email}/tareas.json"
+    meses_nombres = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+    mes_nombre = meses_nombres[mes] if 1 <= mes <= 12 else f"Mes {mes}"
+
+    try:
+        # Leer datos de tareas
+        tareas_data = mostrar_tareas(email) # Reutilizar función de carga segura
+        tareas = tareas_data.get("tareas", [])
+
+        tareas_del_mes = []
+        for tarea in tareas:
+            # Considerar fecha límite primero, si no, fecha de creación para filtrar por mes/año
+            fecha_ref_str = tarea.get("fecha_limite") or tarea.get("fecha_creacion")
+            if fecha_ref_str:
+                try:
+                    fecha_obj = datetime.strptime(fecha_ref_str, '%Y-%m-%d %H:%M:%S')
+                    # Filtrar por mes y año
+                    if fecha_obj.month == mes and fecha_obj.year == anho:
+                        tareas_del_mes.append(tarea)
+                except ValueError:
+                    pass # Ignorar tareas con formato de fecha inválido
+
+        # Ordenar tareas del mes: Pendientes primero, luego por fecha límite/creación, luego descripción
+        tareas_del_mes.sort(key=lambda t: (
+            t.get("completada", False), # Pendientes (False=0) antes que completadas (True=1)
+            t.get("fecha_limite") or t.get("fecha_creacion") or "9999", # Sin fecha al final
+            t.get("descripcion", "")
+        ))
+
+        tareas_completadas = [t for t in tareas_del_mes if t.get("completada")]
+        tareas_pendientes = [t for t in tareas_del_mes if not t.get("completada")]
+        total_tareas = len(tareas_del_mes)
+        tasa_completitud = (len(tareas_completadas) / total_tareas * 100) if total_tareas > 0 else 0
+
+        # --- INICIO: Generar reporte HTML Mejorado ---
+        reporte_html = f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <title>Reporte de Tareas - {mes_nombre} {anho}</title>
+            <style>
+                body {{
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    line-height: 1.6;
+                    margin: 20px;
+                    background-color: #f9f9f9;
+                    color: #333;
+                }}
+                .report-container {{
+                    background-color: #fff;
+                    padding: 25px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    max-width: 800px; /* Ancho máximo para legibilidad */
+                    margin: auto; /* Centrar contenedor */
+                }}
+                h1, h2, h3 {{
+                    color: #005a9e; /* Un azul oscuro */
+                    border-bottom: 2px solid #e0e0e0;
+                    padding-bottom: 5px;
+                    margin-top: 25px;
+                    margin-bottom: 15px;
+                }}
+                h1 {{ font-size: 1.8em; text-align: center; border-bottom: none; margin-bottom: 5px; }}
+                h2 {{ font-size: 1.4em; text-align: center; margin-top: 0; padding-bottom: 10px; margin-bottom: 25px;}}
+                h3 {{ font-size: 1.2em; color: #333; border-bottom: 1px dashed #ccc; }}
+                ul {{
+                    list-style-type: none;
+                    padding-left: 0;
+                }}
+                li {{
+                    margin-bottom: 12px;
+                    border-bottom: 1px solid #f0f0f0;
+                    padding: 10px 5px;
+                    display: flex;
+                    align-items: flex-start;
+                    transition: background-color 0.2s ease; /* Suave hover */
+                }}
+                 li:hover {{
+                    background-color: #f5f5f5; /* Ligero fondo al pasar el ratón */
+                }}
+                li:last-child {{
+                    border-bottom: none;
+                }}
+                .task-icon {{
+                    margin-right: 12px;
+                    font-size: 1.2em; /* Icono un poco más grande */
+                    width: 25px; /* Ancho fijo */
+                    text-align: center;
+                    line-height: 1.2; /* Alinear mejor verticalmente */
+                    flex-shrink: 0; /* Evitar que el icono se encoja */
+                }}
+                .task-content {{
+                    flex-grow: 1;
+                }}
+                .task-desc {{
+                    font-weight: 600;
+                    display: block;
+                    margin-bottom: 4px;
+                    color: #222; /* Descripción un poco más oscura */
+                }}
+                .task-details {{
+                    font-size: 0.85em;
+                    color: #555; /* Detalles más grises */
+                    display: flex; /* Alinear detalles horizontalmente */
+                    flex-wrap: wrap; /* Permitir que pasen a línea nueva si no caben */
+                    gap: 5px 15px; /* Espacio vertical y horizontal entre elementos */
+                }}
+                .category-tag {{
+                    background-color: #e7f3ff;
+                    color: #005a9e;
+                    padding: 2px 8px; /* Un poco más de padding */
+                    border-radius: 10px; /* Más redondeado */
+                    font-size: 0.8em;
+                    white-space: nowrap; /* Evitar que se parta la etiqueta */
+                }}
+                .date-info {{
+                     white-space: nowrap;
+                }}
+                .status-completed .task-icon {{ color: #28a745; }} /* Verde */
+                .status-completed .task-desc {{ text-decoration: line-through; color: #888; }}
+                .status-pending .task-icon {{ color: #ffc107; }} /* Ámbar */
+                .status-overdue .task-icon {{ color: #dc3545; }} /* Rojo */
+                .status-overdue .task-desc {{ color: #b82e3b; }}
+                .status-overdue .date-info {{ color: #dc3545; font-weight: bold; }}
+                .summary {{
+                    background-color: #f0f4f8; /* Azul/gris muy pálido */
+                    border: 1px solid #d6dde5;
+                    padding: 15px 20px;
+                    margin-bottom: 30px;
+                    border-radius: 6px;
+                }}
+                .summary h3 {{ margin-top: 0; border: none; }}
+                .summary p {{ margin: 6px 0; font-size: 0.95em; }}
+                .summary strong {{ color: #1a4a73; }} /* Resaltar números */
+                .no-tasks {{ font-style: italic; color: #888; padding: 10px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="report-container">
+                <h1>Reporte de Tareas</h1>
+                <h2>{mes_nombre} {anho}</h2>
+
+                <div class="summary">
+                    <h3>Resumen del Mes</h3>
+                    <p><strong>Total de tareas en el mes:</strong> {total_tareas}</p>
+                    <p><strong>Tareas completadas:</strong> {len(tareas_completadas)}</p>
+                    <p><strong>Tareas pendientes:</strong> {len(tareas_pendientes)}</p>
+                    <p><strong>Tasa de completitud:</strong> {tasa_completitud:.1f}%</p>
+                </div>
+
+                <h3>Tareas Pendientes ({len(tareas_pendientes)})</h3>
+        """
+
+        if tareas_pendientes:
+            reporte_html += "<ul>"
+            now_date = datetime.now().date()
+            for tarea in tareas_pendientes:
+                desc = html.escape(tarea.get('descripcion', 'Sin descripción'))
+                cat = html.escape(tarea.get('categoria', 'General'))
+                fecha_info = tarea.get("fecha_limite") or tarea.get("fecha_creacion", "N/A")
+                fecha_display = fecha_info[:16] if fecha_info != "N/A" else "Sin fecha" # Mostrar hasta minutos
+
+                status_class = "status-pending"
+                icon = "●" # Icono pendiente
+
+                # Verificar si está vencida
+                is_overdue = False
+                if tarea.get("fecha_limite"):
+                     try:
+                         limite_dt = datetime.strptime(tarea.get("fecha_limite"), '%Y-%m-%d %H:%M:%S').date()
+                         if limite_dt < now_date:
+                             status_class = "status-overdue"
+                             icon = "✕" # Icono vencido
+                             is_overdue = True
+                     except ValueError:
+                         pass # Ignorar error de formato
+
+                reporte_html += f"""
+                     <li class="{status_class}">
+                        <span class="task-icon">{icon}</span>
+                        <div class="task-content">
+                            <span class="task-desc">{desc}</span>
+                            <span class="task-details">
+                                <span class="date-info">{'Límite' if tarea.get("fecha_limite") else 'Creada'}: {fecha_display}</span>
+                                <span class="category-tag">{cat}</span>
+                            </span>
+                        </div>
+                    </li>
+                """
+            reporte_html += "</ul>"
+        else:
+            reporte_html += "<p class='no-tasks'><i>¡Felicidades! Ninguna tarea pendiente este mes.</i></p>"
+
+        reporte_html += f"<h3>Tareas Completadas ({len(tareas_completadas)})</h3>"
+
+        if tareas_completadas:
+            reporte_html += "<ul>"
+            for tarea in tareas_completadas:
+                desc = html.escape(tarea.get('descripcion', 'Sin descripción'))
+                cat = html.escape(tarea.get('categoria', 'General'))
+                fecha_info = tarea.get("fecha_limite") or tarea.get("fecha_creacion", "N/A")
+                fecha_display = fecha_info[:16] if fecha_info != "N/A" else "N/A"
+                reporte_html += f"""
+                    <li class="status-completed">
+                        <span class="task-icon">✓</span>
+                        <div class="task-content">
+                            <span class="task-desc">{desc}</span>
+                             <span class="task-details">
+                                <span class="date-info">Fecha: {fecha_display}</span>
+                                <span class="category-tag">{cat}</span>
+                            </span>
+                        </div>
+                    </li>
+                """
+            reporte_html += "</ul>"
+        else:
+            reporte_html += "<p class='no-tasks'><i>Ninguna tarea completada en este mes.</i></p>"
+
+
+        reporte_html += """
+            </div> </body>
+        </html>"""
+        # --- FIN: Generar reporte HTML Mejorado ---
+        return reporte_html
 
     except FileNotFoundError:
-        return "Aún no tienes tareas registradas."
+         # Devolver HTML simple para errores
+        return f"<p style='color:orange; font-family: sans-serif;'>Aún no tienes tareas registradas para generar un reporte del mes {mes}/{anho}.</p>"
+    except json.JSONDecodeError:
+        print(f"Error: Archivo corrupto para {email} al generar reporte.")
+        return "<p style='color:red; font-family: sans-serif;'><b>Error interno al generar el reporte (archivo de tareas corrupto).</b></p>"
     except Exception as e:
-        print(f"Error al generar reporte mensual: {e}")
-        return f"Hubo un error al generar el reporte: {e}"
+        print(f"Error inesperado al generar reporte para {email}: {e}")
+        return f"<p style='color:red; font-family: sans-serif;'><b>Error interno inesperado al generar el reporte:</b><br>{html.escape(str(e))}</p>"
+
+# --- FIN DEL ARCHIVO commands.py ---
